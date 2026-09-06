@@ -14,7 +14,8 @@ GPU, or graphics binding is unavailable unless `required = true` is selected.
 - A D3D12-capable GPU and driver accepted by both OpenXR and Dawn.
 - A build made with `MKW_ENABLE_OPENXR=ON`, which is enabled by default on Windows.
 
-Linux has a capability-gated Vulkan scaffold; it does not yet enable same-device OpenXR rendering.
+The supported OpenXR distribution target is Windows with D3D12. Linux and other platforms are not
+supported release targets.
 
 ## Configuration
 
@@ -119,11 +120,7 @@ the configuration file.
 | Backend | Status |
 | --- | --- |
 | Windows D3D12 | Implemented: same-adapter, same-device asynchronous OpenXR submission. |
-| Linux Vulkan | Capability-gated scaffold; the current Dawn package does not expose the complete native Vulkan context needed for safe interop. |
-| Other platforms | Not wired yet. |
-
-The Vulkan path intentionally does not create an unrelated device or use CPU readback as a
-workaround. It can be enabled once Aurora exposes a safe native Vulkan context and queue contract.
+| Linux / other platforms | Not supported by the current distribution. |
 
 ## Known limitations
 

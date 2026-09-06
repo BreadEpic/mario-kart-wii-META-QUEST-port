@@ -42,7 +42,7 @@ unsupported scenes appear as a head-locked virtual screen; a validated single-ca
 to immersive stereo rendering. VR is opt-in and falls back to the normal desktop renderer if the
 runtime or headset is unavailable. Standard bindings cover Meta/Oculus Touch, Touch Pro, Valve
 Index, Microsoft Mixed Reality, Samsung Odyssey, HTC Vive, PICO, and simple-controller profiles.
-See [`OPENXR.md`](OPENXR.md) for setup, configuration, controls, and current limitations.
+See [`OPENXR.md`](OPENXR.md) for Windows setup, configuration, controls, and current limitations.
 
 **Music ducking.** 
 Start playing something else, Spotify, a YouTube video, and

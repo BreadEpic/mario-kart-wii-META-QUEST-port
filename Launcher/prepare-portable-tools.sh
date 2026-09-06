@@ -275,7 +275,11 @@ for binary in "$work/bin/clang-22" "$work/bin/lld" "$work/bin/llvm-ar" "$work/bi
     [[ -f "$binary" ]] || continue
     while read -r soname path; do
         [[ -n "$soname" ]] || continue
-        if [[ "$path" != "$bundled_lib_dir/"* ]]; then
+        # ldd may print an equivalent path containing bin/../ when it resolves a
+        # binary's $ORIGIN runpath. Compare canonical paths so that formatting
+        # differences do not turn a bundled library into a false host-dependency.
+        resolved_path=$(readlink -f "$path")
+        if [[ "$resolved_path" != "$bundled_lib_dir/"* ]]; then
             echo "prepare-portable-tools.sh: $(basename "$binary") still resolves $soname from the host ($path); bundling failed" >&2
             exit 1
         fi

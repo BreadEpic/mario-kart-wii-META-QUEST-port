@@ -18,6 +18,7 @@ concurrency:
   group: package-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+jobs:
   windows-installer:
     name: Windows (installer exe)
     runs-on: windows-latest

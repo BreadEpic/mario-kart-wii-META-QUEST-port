@@ -1,0 +1,105 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#pragma once
+
+#include <dolphin/pad.h>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+
+namespace mkw::vr {
+
+struct QuestInput {
+    bool active = false;
+    float steering_x = 0, steering_y = 0;
+    float tricks_x = 0, tricks_y = 0;
+    float accelerate = 0, item = 0, drift = 0;
+    bool confirm = false, brake = false, trick = false, look_back = false, pause = false;
+};
+
+inline float QuestAxis(float value) noexcept {
+    uint32_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    if ((bits & 0x7f800000u) == 0x7f800000u) return 0;
+    return std::clamp(value, -1.0f, 1.0f);
+}
+
+struct QuestStickCalibration {
+    float deadzone = 0.15f;
+    float outer = 1.0f;
+    float center_x = 0.0f, center_y = 0.0f;
+};
+
+inline float CenterQuestAxis(float value, float center) noexcept {
+    center = std::clamp(QuestAxis(center), -0.3f, 0.3f);
+    const float offset = QuestAxis(value) - center;
+    return std::clamp(offset / (offset >= 0 ? 1.0f - center : 1.0f + center), -1.0f, 1.0f);
+}
+
+inline PADStatus MapQuestInput(const QuestInput& input, const QuestStickCalibration& calibration = {}) noexcept {
+    PADStatus pad{};
+    pad.err = input.active ? PAD_ERR_NONE : PAD_ERR_NO_CONTROLLER;
+    if (!input.active) return pad;
+    if (input.trick && input.look_back) return pad; // X + Y opens VR settings.
+    const float x = CenterQuestAxis(input.steering_x, calibration.center_x);
+    const float y = CenterQuestAxis(input.steering_y, calibration.center_y);
+    const float length = std::sqrt(x * x + y * y);
+    const float deadzone = std::clamp(QuestAxis(calibration.deadzone), 0.0f, 0.4f);
+    const float outer = std::clamp(QuestAxis(calibration.outer), 0.6f, 1.0f);
+    // Radial deadzone with continuous rescaling preserves full steering range.
+    if (length > deadzone) {
+        const float scale = std::min((length - deadzone) / (outer - deadzone), 1.0f) * 100.0f / length;
+        pad.stickX = static_cast<int8_t>(std::lround(x * scale));
+        pad.stickY = static_cast<int8_t>(std::lround(y * scale)); // OpenXR +Y is up, like GC.
+    }
+    if (QuestAxis(input.accelerate) > 0.5f || input.confirm) {
+        pad.button |= PAD_BUTTON_A;
+        pad.analogA = 255;
+    }
+    if (input.brake) { pad.button |= PAD_BUTTON_B; pad.analogB = 255; }
+    if (QuestAxis(input.item) > 0.5f) { pad.button |= PAD_TRIGGER_L; pad.triggerL = 255; }
+    if (QuestAxis(input.drift) > 0.5f) { pad.button |= PAD_TRIGGER_R; pad.triggerR = 255; }
+    if (input.look_back) pad.button |= PAD_BUTTON_X;
+    if (input.pause) pad.button |= PAD_BUTTON_START;
+    if (input.trick || QuestAxis(input.tricks_y) > 0.6f) pad.button |= PAD_BUTTON_UP;
+    if (QuestAxis(input.tricks_y) < -0.6f) pad.button |= PAD_BUTTON_DOWN;
+    if (QuestAxis(input.tricks_x) > 0.6f) pad.button |= PAD_BUTTON_RIGHT;
+    if (QuestAxis(input.tricks_x) < -0.6f) pad.button |= PAD_BUTTON_LEFT;
+    return pad;
+}
+
+// F10 must not leak gameplay input, including buttons held while it closes.
+class QuestPadFilter {
+public:
+    PADStatus Apply(PADStatus pad, bool blocked) noexcept {
+        if (blocked) {
+            suppressed_ = pad.button;
+            suppress_stick_ = pad.stickX != 0 || pad.stickY != 0;
+            pad = {};
+            pad.err = PAD_ERR_NONE;
+            return pad;
+        }
+        suppressed_ &= pad.button;
+        pad.button &= ~suppressed_;
+        if (!(pad.button & PAD_BUTTON_A)) pad.analogA = 0;
+        if (!(pad.button & PAD_BUTTON_B)) pad.analogB = 0;
+        if (!(pad.button & PAD_TRIGGER_L)) pad.triggerL = 0;
+        if (!(pad.button & PAD_TRIGGER_R)) pad.triggerR = 0;
+        if (suppress_stick_) {
+            suppress_stick_ = pad.stickX != 0 || pad.stickY != 0;
+            pad.stickX = pad.stickY = 0;
+        }
+        return pad;
+    }
+private:
+    uint16_t suppressed_ = 0;
+    bool suppress_stick_ = false;
+};
+
+// XR thread publishes; guest PADRead consumes. No OpenXR calls on the guest thread.
+void PublishQuestInput(const QuestInput& input) noexcept;
+QuestInput ReadQuestInputSnapshot() noexcept;
+void SetQuestStickCalibration(const QuestStickCalibration& calibration) noexcept;
+bool ReadQuestPad(PADStatus& output, bool blocked) noexcept;
+
+} // namespace mkw::vr

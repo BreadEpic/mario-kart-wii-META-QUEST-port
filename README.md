@@ -1,5 +1,5 @@
 
-# WiiCompiled
+# Mario Kart Wii VR Port
 
 A native PC port of Mario Kart Wii, made with static recompilation.
 
@@ -36,12 +36,15 @@ The graphics layer is built on
 **High internal resolution.** 
 Play at several times the console's resolution.
 
-**Experimental OpenXR VR.**
-Windows builds can render through a D3D12 OpenXR runtime without CPU readback. Menus and
-unsupported scenes appear as a head-locked virtual screen; a validated single-camera race switches
-to immersive stereo rendering. VR is opt-in and falls back to the normal desktop renderer if the
-runtime or headset is unavailable. Standard bindings cover Meta/Oculus Touch, Touch Pro, Valve
-Index, Microsoft Mixed Reality, Samsung Odyssey, HTC Vive, PICO, and simple-controller profiles.
+**OpenXR VR.**
+Windows builds render through a D3D12 OpenXR runtime without CPU readback. Press the right Quest
+stick to switch between the original game camera, first person, and a distant diorama view. The
+track map and item panel can follow the left hand. Quest Touch controls include steering, throttle,
+brake, drifting, items, tricks, look back, menu navigation, and an in-game stick calibration page.
+The English VR settings menu also provides per-eye resolution presets, sharp rendering, FPS display,
+camera placement, world scale, and HUD placement. Standard bindings cover Meta/Oculus Touch,
+Touch Pro, Valve Index, Microsoft Mixed Reality, Samsung Odyssey, HTC Vive, PICO, and
+simple-controller profiles.
 See [`OPENXR.md`](OPENXR.md) for Windows setup, configuration, controls, and current limitations.
 
 **Music ducking.** 
@@ -117,10 +120,19 @@ regions, patched executables) is rejected outright.
 
 ## Installing
 
-For an easy experience, use [Wheel Wizard](https://github.com/TeamWheelWizard/WheelWizard). Pick your clean PAL `RMCP01`
-image under Settings, turn on **WiiCompiled (beta)**, and hit install from the Home page.
-Wheel Wizard downloads the setup tool from this repo and walks you through install, updates and
-launching. The backend itself is deliberately command-line only, Wheel Wizard is a wrapper around it.
+Download `WiiCompiled-VR-Setup-v0.4.0.exe` from the
+[latest release](https://github.com/heurazy/mario-kart-wii-VR-port/releases/latest). The English
+installer asks you to choose your own clean PAL `RMCP01` disc image and an installation folder.
+Enable the portable option if you want settings, NAND, cache, and logs kept beside the game.
+
+The `WiiCompiled-VR-Portable-v0.4.0.zip` release also includes the integrated Wheel Wizard launcher.
+Extract the complete archive, run `WiiCompiled-VR-Setup.exe`, choose the ROM, keep portable mode
+enabled, then launch `WheelWizard\WheelWizard.exe`. You can select **Mario Kart Wii VR** or
+**Retro Rewind VR** from the full-width game selector. To build Retro Rewind VR, select an existing
+`RetroRewind6` folder in the optional installer field.
+
+Neither download contains Nintendo code, translated game code, game assets, or a ROM. Translation
+and compilation happen locally from the disc image you select.
 
 
 > [!CAUTION]

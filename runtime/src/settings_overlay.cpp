@@ -747,24 +747,24 @@ void DrawVrStickSettings(const mkw::vr::QuestInput& input) {
     static auto started = Clock::now();
     static float sumX = 0, sumY = 0, minX = 1, maxX = -1, minY = 1, maxY = -1;
     static int samples = 0;
-    static const char* message = "Relache le stick pour verifier son centre, puis pousse-le a gauche et a droite.";
+    static const char* message = "Release the stick to check its center, then push it left and right.";
     const auto mapped = mkw::vr::MapQuestInput(input, g_vrStickCalibration);
-    ImGui::Text("Stick brut : X %+.2f   Y %+.2f", input.steering_x, input.steering_y);
-    ImGui::Text("Direction envoyee au jeu : %d %%", static_cast<int>(mapped.stickX));
-    ImGui::ProgressBar((mapped.stickX + 100.0f) / 200.0f, ImVec2(-1, 0), "Gauche                 Centre                 Droite");
+    ImGui::Text("Raw stick: X %+.2f   Y %+.2f", input.steering_x, input.steering_y);
+    ImGui::Text("Steering sent to the game: %d %%", static_cast<int>(mapped.stickX));
+    ImGui::ProgressBar((mapped.stickX + 100.0f) / 200.0f, ImVec2(-1, 0), "Left                   Center                   Right");
     ImGui::TextWrapped("%s", message);
     bool changed = false;
-    if (!input.active) ImGui::TextDisabled("Manette Quest non suivie.");
+    if (!input.active) ImGui::TextDisabled("Quest controller is not being tracked.");
     ImGui::BeginDisabled(!input.active || calibrating);
-    if (ImGui::Button("Calibrer le centre (relacher le stick)")) {
+    if (ImGui::Button("Calibrate center (release the stick)")) {
         started = Clock::now(); calibrating = true; samples = 0; sumX = sumY = 0;
         minX = minY = 1; maxX = maxY = -1;
-        message = "Relache le stick et attends deux secondes.";
+        message = "Release the stick and wait for two seconds.";
     }
     ImGui::EndDisabled();
     if (calibrating) {
         const float elapsed = std::chrono::duration<float>(Clock::now() - started).count();
-        if (!input.active) { calibrating = false; message = "Calibration annulee : manette non suivie."; }
+        if (!input.active) { calibrating = false; message = "Calibration canceled: controller is not being tracked."; }
         else if (elapsed >= 1 && elapsed < 2) {
             sumX += input.steering_x; sumY += input.steering_y; ++samples;
             minX = std::min(minX, input.steering_x); maxX = std::max(maxX, input.steering_x);
@@ -775,22 +775,22 @@ void DrawVrStickSettings(const mkw::vr::QuestInput& input) {
                 std::abs(sumX / samples) <= 0.3f && std::abs(sumY / samples) <= 0.3f) {
                 g_vrStickCalibration.center_x = sumX / samples;
                 g_vrStickCalibration.center_y = sumY / samples;
-                changed = true; message = "Centre calibre et enregistre.";
-            } else message = "Stick trop deplace ou instable : relache-le puis recommence.";
+                changed = true; message = "Stick center calibrated and saved.";
+            } else message = "The stick moved too much or was unstable. Release it and try again.";
         }
     }
     ImGui::BeginDisabled(calibrating);
     float deadzone = g_vrStickCalibration.deadzone * 100;
     float outer = g_vrStickCalibration.outer * 100;
-    if (ImGui::SliderFloat("Zone morte", &deadzone, 0, 40, "%.0f %%")) {
+    if (ImGui::SliderFloat("Deadzone", &deadzone, 0, 40, "%.0f %%")) {
         g_vrStickCalibration.deadzone = deadzone / 100; changed = true;
     }
-    if (ImGui::SliderFloat("Course pour braquer au maximum", &outer, 60, 100, "%.0f %%")) {
+    if (ImGui::SliderFloat("Travel for full steering", &outer, 60, 100, "%.0f %%")) {
         g_vrStickCalibration.outer = outer / 100; changed = true;
     }
-    ImGui::TextWrapped("Augmente la zone morte si la direction bouge au repos. Reduis la course si le stick pousse a fond n'atteint pas 100 %.");
-    if (ImGui::Button("Reinitialiser le stick")) {
-        g_vrStickCalibration = {}; changed = true; message = "Reglages du stick reinitialises.";
+    ImGui::TextWrapped("Increase the deadzone if steering moves while the stick is at rest. Reduce travel if pushing the stick fully does not reach 100 %.");
+    if (ImGui::Button("Reset stick settings")) {
+        g_vrStickCalibration = {}; changed = true; message = "Stick settings reset.";
     }
     ImGui::EndDisabled();
     if (changed) {
@@ -824,16 +824,16 @@ void DrawVrSettings() {
     ImGui::SetNextWindowSize(ImVec2(std::min(680.0f, io.DisplaySize.x * 0.94f), io.DisplaySize.y * 0.92f), ImGuiCond_Always);
     if (g_vrSettingsFocus) ImGui::SetNextWindowFocus();
     bool visible = true;
-    if (ImGui::Begin("Options VR", &visible, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize)) {
-        ImGui::TextDisabled("Stick : naviguer / regler   A : valider   B : retour   X + Y : fermer");
+    if (ImGui::Begin("VR Settings", &visible, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize)) {
+        ImGui::TextDisabled("Stick: navigate / adjust   A: confirm   B: back   X + Y: close");
         if (g_vrSettingsFocus) ImGui::SetKeyboardFocusHere();
-        if (ImGui::Button("Revenir au jeu")) visible = false;
+        if (ImGui::Button("Return to game")) visible = false;
         ImGui::Separator();
         if (ImGui::BeginTabBar("VR categories")) {
-            if (ImGui::BeginTabItem("Image")) {
+            if (ImGui::BeginTabItem("Graphics")) {
                 float scale = RuntimeConfigFile::VrRenderScale();
                 constexpr float scales[]{0.65f, 0.80f, 1.0f, 1.20f};
-                constexpr const char* names[]{"Performance", "Equilibre", "Qualite", "Ultra"};
+                constexpr const char* names[]{"Performance", "Balanced", "Quality", "Ultra"};
                 for (int i = 0; i < 4; ++i) {
                     if (i) ImGui::SameLine();
                     if (ImGui::RadioButton(names[i], std::abs(scale - scales[i]) < 0.001f)) {
@@ -841,29 +841,29 @@ void DrawVrSettings() {
                     }
                 }
                 float percent = scale * 100.0f;
-                if (ImGui::SliderFloat("Resolution par oeil", &percent, 50, 150, "%.0f %%"))
+                if (ImGui::SliderFloat("Resolution per eye", &percent, 50, 150, "%.0f %%"))
                     RuntimeConfigFile::SetVrRenderScale(percent / 100.0f);
-                ImGui::TextWrapped("Resolution enregistree pour le prochain lancement. Plus de nettete demande plus de puissance graphique.");
-                if (ImGui::Checkbox("Image nette (desactiver le filtre Wii)", &g_disableCopyFilter)) {
+                ImGui::TextWrapped("The resolution is saved for the next launch. A sharper image requires more GPU power.");
+                if (ImGui::Checkbox("Sharp image (disable Wii copy filter)", &g_disableCopyFilter)) {
                     aurora_set_disable_copy_filter(g_disableCopyFilter);
                     RuntimeConfigFile::SetDisableCopyFilter(g_disableCopyFilter);
                 }
-                if (ImGui::Checkbox("Afficher les FPS", &g_showFps)) RuntimeConfigFile::SetShowFps(g_showFps);
-                ImGui::TextWrapped("La frequence du casque se regle dans Quest Link, SteamVR ou Virtual Desktop. La vitesse du jeu reste normale.");
+                if (ImGui::Checkbox("Show FPS", &g_showFps)) RuntimeConfigFile::SetShowFps(g_showFps);
+                ImGui::TextWrapped("Set the headset refresh rate in Quest Link, SteamVR, or Virtual Desktop. Game speed stays normal.");
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Cameras")) {
                 int mode = static_cast<int>(mkw::vr::MkwVRGetCameraMode());
-                const char* modes[]{"Camera du jeu", "Premiere personne", "Diorama"};
-                if (ImGui::Combo("Vue", &mode, modes, 3))
+                const char* modes[]{"Original camera", "First person", "Diorama"};
+                if (ImGui::Combo("View", &mode, modes, 3))
                     mkw::vr::MkwVRSetCameraMode(static_cast<mkw::vr::CameraMode>(mode));
-                ImGui::TextDisabled("Le clic du stick droit change aussi la vue.");
+                ImGui::TextDisabled("Press the right stick to switch views.");
                 if (mode == 1) {
                     bool changed = false;
-                    changed |= ImGui::SliderFloat("Hauteur des yeux", &g_vrFirstPersonHeadUp, 0.1f, 2.0f, "%.2f m");
-                    changed |= ImGui::SliderFloat("Avancer les yeux", &g_vrFirstPersonHeadForward, -1.0f, 3.0f, "%.2f m");
-                    changed |= ImGui::SliderFloat("Decalage lateral", &g_vrFirstPersonHeadRight, -0.5f, 0.5f, "%.2f m");
-                    if (ImGui::Button("Reinitialiser le siege")) {
+                    changed |= ImGui::SliderFloat("Eye height", &g_vrFirstPersonHeadUp, 0.1f, 2.0f, "%.2f m");
+                    changed |= ImGui::SliderFloat("Eye position forward", &g_vrFirstPersonHeadForward, -1.0f, 3.0f, "%.2f m");
+                    changed |= ImGui::SliderFloat("Horizontal offset", &g_vrFirstPersonHeadRight, -0.5f, 0.5f, "%.2f m");
+                    if (ImGui::Button("Reset seat position")) {
                         g_vrFirstPersonHeadUp = 1.1f; g_vrFirstPersonHeadForward = 1.2f;
                         g_vrFirstPersonHeadRight = 0; changed = true;
                     }
@@ -873,30 +873,30 @@ void DrawVrSettings() {
                         RuntimeConfigFile::SetVrFirstPersonHeadRightMeters(g_vrFirstPersonHeadRight);
                         mkw::vr::MkwVRFirstPersonApplyConfiguredSettings();
                     }
-                    ImGui::TextWrapped("Avance les yeux si le pilote reste devant toi. Le placement peut varier selon le personnage et le vehicule.");
+                    ImGui::TextWrapped("Move the eyes forward if the driver remains in front of you. Placement can vary by character and vehicle.");
                 }
                 if (mode == 2) {
                     float distance = RuntimeConfigFile::VrDioramaDistance() / 100;
                     float height = RuntimeConfigFile::VrDioramaHeight() / 100;
                     float miniature = RuntimeConfigFile::VrDioramaUnitsPerMeter() / 100;
-                    if (ImGui::SliderFloat("Recul derriere le kart", &distance, 2, 50, "%.1f m")) RuntimeConfigFile::SetVrDioramaDistance(distance * 100);
-                    if (ImGui::SliderFloat("Hauteur au-dessus du kart", &height, 1, 40, "%.1f m")) RuntimeConfigFile::SetVrDioramaHeight(height * 100);
-                    if (ImGui::SliderFloat("Reduction du monde", &miniature, 1, 30, "1 / %.1f")) RuntimeConfigFile::SetVrDioramaUnitsPerMeter(miniature * 100);
-                    if (ImGui::Button("Reinitialiser le diorama")) {
+                    if (ImGui::SliderFloat("Distance behind the kart", &distance, 2, 50, "%.1f m")) RuntimeConfigFile::SetVrDioramaDistance(distance * 100);
+                    if (ImGui::SliderFloat("Height above the kart", &height, 1, 40, "%.1f m")) RuntimeConfigFile::SetVrDioramaHeight(height * 100);
+                    if (ImGui::SliderFloat("World scale", &miniature, 1, 30, "1 / %.1f")) RuntimeConfigFile::SetVrDioramaUnitsPerMeter(miniature * 100);
+                    if (ImGui::Button("Reset diorama")) {
                         RuntimeConfigFile::SetVrDioramaDistance(1600);
                         RuntimeConfigFile::SetVrDioramaHeight(1200);
                         RuntimeConfigFile::SetVrDioramaUnitsPerMeter(1000);
                     }
-                    ImGui::TextWrapped("La vue suit le centre du kart, avec une echelle miniature independante.");
+                    ImGui::TextWrapped("The view follows the center of the kart with an independent miniature scale.");
                 }
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem("Affichage")) {
-                if (ImGui::Checkbox("Carte et objets sur la main gauche", &g_vrHudVirtualScreen)) {
+            if (ImGui::BeginTabItem("Display")) {
+                if (ImGui::Checkbox("Map and items on the left hand", &g_vrHudVirtualScreen)) {
                     RuntimeConfigFile::SetVrHudVirtualScreen(g_vrHudVirtualScreen);
                     ApplyVrHudVirtualScreen();
                 }
-                ImGui::TextWrapped("Decoche pour afficher le HUD devant les yeux. Les reglages de camera et d'affichage s'appliquent en revenant au jeu.");
+                ImGui::TextWrapped("Clear this option to show the HUD in front of your eyes. Camera and display changes apply when you return to the game.");
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Stick")) {
@@ -1005,7 +1005,7 @@ void DrawGraphicsSettings() {
     }
     ImGui::TextDisabled("OpenXR mode changes take effect after restarting the game.");
 
-    if (ImGui::Button("Options VR")) SetVrSettingsVisible(true);
+    if (ImGui::Button("VR Settings")) SetVrSettingsVisible(true);
 }
 
 void DrawFpsOverlay() {

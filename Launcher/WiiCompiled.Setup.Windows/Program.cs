@@ -1,9 +1,8 @@
-﻿namespace WiiCompiled.Setup.Windows;
-
-using System.Runtime.InteropServices;
+namespace WiiCompiled.Setup.Windows;
 
 internal static class Program
 {
+    [STAThread]
     private static int Main(string[] args)
     {
         var progressJson = CommandLine.WantsProgressJson(args);
@@ -12,14 +11,8 @@ internal static class Program
         {
             PlatformChecks.EnsureSupportedHost();
 
-            if (args.Length == 0 && GetConsoleProcessList(new uint[1], 1) == 1)
-            {
-                Console.Out.WriteLine(
-                    "Mario Kart WiiCompiled is installed through Wheel Wizard - download it from " +
-                    "https://github.com/TeamWheelWizard/WheelWizard");
-                Console.ReadKey(intercept: true);
-                return 0;
-            }
+            if (args.Length == 0)
+                return EnglishInstaller.Run();
 
             CommandLine command;
             try
@@ -101,10 +94,6 @@ internal static class Program
         }
     }
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern uint GetConsoleProcessList(
-        [Out] uint[] processList,
-        uint processCount);
 }
 
 internal static class PlatformChecks
@@ -121,7 +110,7 @@ internal static class PlatformChecks
 internal static class ProductInfo
 {
     public const string Name = "WiiCompiled";
-    public const string Version = "0.3.0";
+    public const string Version = "0.4.0";
 
     /// <summary>
     /// The setup executable is copied into the installation under this name. It is the launcher and

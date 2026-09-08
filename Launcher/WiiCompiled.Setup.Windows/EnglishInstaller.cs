@@ -337,7 +337,7 @@ internal static class EnglishInstaller
                 _status.Text = "Finding the latest Retro Rewind release...";
                 _details.AppendText(_status.Text + Environment.NewLine);
                 using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-                client.DefaultRequestHeaders.UserAgent.ParseAdd("WiiCompiled-VR-Setup/0.4.2");
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("WiiCompiled-VR-Setup/0.4.3");
                 var downloadText = (await client.GetStringAsync(officialEndpoint)).Trim();
                 if (!Uri.TryCreate(downloadText, UriKind.Absolute, out var downloadUri) ||
                     downloadUri.Scheme != Uri.UriSchemeHttps ||

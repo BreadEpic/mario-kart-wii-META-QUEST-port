@@ -324,7 +324,11 @@ internal static class EnglishInstaller
         private async Task<string> DownloadLatestRetroRewindAsync(string destinationParent)
         {
             const string officialEndpoint = "https://update.rwfc.net/RetroRewind/RetroRewindInstall.txt";
-            var temporaryRoot = Path.Combine(Path.GetTempPath(), "wiicompiled-retro-" + Guid.NewGuid().ToString("N"));
+            // Keep staging on the destination volume because Directory.Move cannot cross drives.
+            destinationParent = Path.GetFullPath(destinationParent);
+            Directory.CreateDirectory(destinationParent);
+            var temporaryRoot = Path.Combine(destinationParent,
+                ".wiicompiled-retro-" + Guid.NewGuid().ToString("N"));
             var archivePath = Path.Combine(temporaryRoot, "RetroRewind.zip");
             var extractionPath = Path.Combine(temporaryRoot, "Extracted");
             Directory.CreateDirectory(temporaryRoot);
@@ -333,7 +337,7 @@ internal static class EnglishInstaller
                 _status.Text = "Finding the latest Retro Rewind release...";
                 _details.AppendText(_status.Text + Environment.NewLine);
                 using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-                client.DefaultRequestHeaders.UserAgent.ParseAdd("WiiCompiled-VR-Setup/0.4.1");
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("WiiCompiled-VR-Setup/0.4.2");
                 var downloadText = (await client.GetStringAsync(officialEndpoint)).Trim();
                 if (!Uri.TryCreate(downloadText, UriKind.Absolute, out var downloadUri) ||
                     downloadUri.Scheme != Uri.UriSchemeHttps ||
@@ -369,7 +373,6 @@ internal static class EnglishInstaller
                 if (!File.Exists(Path.Combine(source, "Binaries", "Code.pul")))
                     throw new InvalidDataException("The official archive does not contain RetroRewind6\\Binaries\\Code.pul.");
 
-                Directory.CreateDirectory(destinationParent);
                 var destination = Path.Combine(destinationParent, "RetroRewind6");
                 if (Directory.Exists(destination)) Directory.Delete(destination, recursive: true);
                 Directory.Move(source, destination);

@@ -292,5 +292,3 @@ internal static class EnglishInstaller
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
     }
 }
-
-

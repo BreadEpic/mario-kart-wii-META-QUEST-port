@@ -3,7 +3,7 @@ index f934e22..3eb3e87 100644
 --- a/WheelWizard/Features/AutoUpdating/AutoUpdaterSingletonService.cs
 +++ b/WheelWizard/Features/AutoUpdating/AutoUpdaterSingletonService.cs
 @@ -24,6 +24,9 @@ public class AutoUpdaterSingletonService(
- 
+
      public async Task CheckForUpdatesAsync()
      {
 +        // An upstream binary would remove the local VR launcher integration.
@@ -120,7 +120,7 @@ index 52418fc..119ea84 100644
 +        )
      );
      private static string? _wheelWizardAppdataOverride;
- 
+
      static PathManager()
      {
 -        _wheelWizardAppdataOverride = LoadSavedWheelWizardAppdataOverride();
@@ -128,7 +128,7 @@ index 52418fc..119ea84 100644
 +            ? null
 +            : LoadSavedWheelWizardAppdataOverride();
      }
- 
+
      public static string HomeFolderPath => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 diff --git a/WheelWizard/Views/App.axaml.cs b/WheelWizard/Views/App.axaml.cs
 index 399fa5a..a915a3d 100644
@@ -164,7 +164,7 @@ index a80a85a..77f16aa 100644
 +++ b/WheelWizard/Views/Pages/HomePage.axaml
 @@ -118,11 +118,11 @@
                  VerticalAlignment="Bottom" />
- 
+
          <StackPanel Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Top" Margin="0,6"
 -                    HorizontalAlignment="Right"
 +                    HorizontalAlignment="Right" Panel.ZIndex="100"
@@ -175,7 +175,7 @@ index a80a85a..77f16aa 100644
 +                      SelectionChanged="GameModeDropdown_OnSelectionChanged" Width="255"
                        VerticalAlignment="Top" />
          </StackPanel>
- 
+
 diff --git a/WheelWizard/Views/Pages/HomePage.axaml.cs b/WheelWizard/Views/Pages/HomePage.axaml.cs
 index f0b7ca8..6158c93 100644
 --- a/WheelWizard/Views/Pages/HomePage.axaml.cs
@@ -183,17 +183,17 @@ index f0b7ca8..6158c93 100644
 @@ -36,6 +36,9 @@ public partial class HomePage : UserControlBase
      [Inject]
      private ILauncherProvider LauncherProvider { get; set; } = null!;
- 
+
 +    [Inject]
 +    private WheelWizard.Mods.IModsLaunchService VrMods { get; set; } = null!;
 +
      [Inject]
      private IRandomSystem RandomSystem { get; set; } = null!;
- 
+
 @@ -93,8 +96,14 @@ public partial class HomePage : UserControlBase
          _trails = [HomeTrail1, HomeTrail2, HomeTrail3, HomeTrail4, HomeTrail5];
          RandomSystem.Random.Shared.Shuffle(_trails);
- 
+
 -        _launcherTypes.Add(LauncherProvider.GetActiveLauncher());
 -        if (SettingsService.IsRecompModeActive())
 +        if (LocalVrLauncher.IsLocalBundle)

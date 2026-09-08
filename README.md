@@ -120,18 +120,18 @@ regions, patched executables) is rejected outright.
 
 ## Installing
 
-Download `WiiCompiled-VR-Setup-v0.4.0.exe` from the
-[latest release](https://github.com/heurazy/mario-kart-wii-VR-port/releases/latest). The English
-installer asks you to choose your own clean PAL `RMCP01` disc image and an installation folder.
-Enable the portable option if you want settings, NAND, cache, and logs kept beside the game.
-
-The `WiiCompiled-VR-Portable-v0.4.0.zip` release also includes the integrated Wheel Wizard launcher.
+Download `WiiCompiled-VR-Portable-v0.4.1.zip` from the
+[latest release](https://github.com/heurazy/mario-kart-wii-VR-port/releases/latest). This is the only
+published package and includes the English installer plus the integrated Wheel Wizard launcher.
 Extract the complete archive, run `WiiCompiled-VR-Setup.exe`, choose the ROM, keep portable mode
 enabled, then launch `WheelWizard\WheelWizard.exe`. You can select **Mario Kart Wii VR** or
-**Retro Rewind VR** from the full-width game selector. To build Retro Rewind VR, select an existing
-`RetroRewind6` folder in the optional installer field.
+**Retro Rewind VR** from the full-width game selector.
 
-Neither download contains Nintendo code, translated game code, game assets, or a ROM. Translation
+The installer downloads and installs the latest Retro Rewind pack from Wheel Wizard's official
+service by default. Clear that option to select an existing `RetroRewind6` folder or install only
+the base VR game.
+
+The download contains no Nintendo code, translated game code, game assets, or ROM. Translation
 and compilation happen locally from the disc image you select.
 
 

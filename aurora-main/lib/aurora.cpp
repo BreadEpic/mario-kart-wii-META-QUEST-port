@@ -643,6 +643,7 @@ gfx::StereoReplayFrame make_stereo_replay_frame(const AuroraStereoFrame& input, 
   Mat3x4<float> anchorFromScene;
   std::memcpy(&anchorFromScene, sceneAnchor.anchorFromScene.data(), sizeof(anchorFromScene));
   gfx::StereoReplayFrame replay{};
+  replay.cockpit = input.cockpit;
   for (uint32_t eye = 0; eye < AURORA_STEREO_EYE_COUNT; ++eye) {
     ensure_stereo_eye_target(eye, input.eyes[eye].width, input.eyes[eye].height);
     const auto& owned = g_stereoEyeTargets[eye];

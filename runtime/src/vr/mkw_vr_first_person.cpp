@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "vr/mkw_vr_first_person.h"
+#include "vr/cockpit_stabilizer.h"
 
 #include "memory.h"
 #include "isa/ppc_isa_context.h"
@@ -9,8 +10,10 @@
 #include "vr/mkw_vr_policy.h"
 
 #include <mutex>
+#include <string>
 
 extern "C" void func_805A6C58(CpuContext* context);
+extern "C" void func_8055CB08(CpuContext* context);
 
 namespace mkw::vr {
 namespace {
@@ -96,6 +99,10 @@ bool ReadRaceCameraViewMatrix(const CpuContext* context, uint32_t camera_address
     call_context.gpr[3] = camera_address;
     call_context.gpr[4] = scratch;
     call_context.gpr[5] = scratch + 48u;
+    // GetViewMtx's third argument is a floating point dolly amount, not an
+    // implicit default. Inheriting the caller's f1 made the anchor use a
+    // different camera from the GX world draws (and changed on impact).
+    call_context.fpr[1].d = 0.0;
     try {
         CpuContextScope scope(&call_context);
         func_805A6C58(&call_context);
@@ -141,6 +148,8 @@ KartPoseRead ReadPlayerKartPose(Mtx34& out) noexcept {
 // ---------------------------------------------------------------------------
 
 struct FirstPersonState {
+    CockpitStabilizer stabilizer;
+    uint64_t stabilized_frame = 0;
     CameraMode mode = CameraMode::Game;
     FirstPersonHeadOffsets offsets{};
     float units_per_meter = 100.0f;
@@ -156,6 +165,75 @@ struct FirstPersonState {
 
 std::mutex g_mutex;
 FirstPersonState g_state;
+
+// These are restored as soon as GX has recorded the frame, before simulation
+// resumes. Do not retain guest model pointers across frames or scene teardown.
+std::array<uint32_t, 6> g_hidden_models{};
+void SetDriverDraw(uint32_t model, bool enabled) noexcept {
+    auto* context = TryGetCpuContext();
+    if (!context || !Memory::Contains(model, 0x4c)) return;
+    try {
+        CpuContext call = *context;
+        call.gpr[3] = model;
+        call.gpr[4] = enabled;
+        CpuContextScope scope(&call);
+        func_8055CB08(&call); // ModelDirector::EnableDraw (also updates ScnMdl options).
+    } catch (const Memory::AccessViolation&) {}
+}
+
+uint32_t LocalDriver(const KartPoseRead& kart) noexcept {
+    uint32_t driver = 0;
+    // Kart::Link::GetDriverController, 80590A40.
+    if (kart.accessor) ReadGuestPointer(kart.accessor + 0x14, driver);
+    return Memory::Contains(driver, 0x144) ? driver : 0;
+}
+
+void HideDriver(uint32_t driver) noexcept {
+    uint32_t count = 0;
+    if (!driver || !Memory::TryRead32(driver + 0xf0, count) || count > 6) return;
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t model = 0, flags = 0;
+        if (ReadGuestPointer(driver + 0xd8 + i * 4, model) &&
+            Memory::TryRead32(model + 4, flags) && (flags & 0x04000000u)) {
+            g_hidden_models[i] = model;
+            SetDriverDraw(model, false);
+        }
+    }
+}
+
+// Use the driver's actual model placement and head bind bone. Bind pose keeps
+// tricks and hit animations from violently rotating/bobbing the user's head.
+// DriverModelBones::resNode is +18; ResNodeData::modelMtx is +70.
+bool ReadDriverEye(uint32_t driver, std::array<float, 3>& eye) noexcept {
+    uint32_t bones = 0;
+    Mtx34 placement{};
+    if (!driver || !ReadGuestPointer(driver + 0x104, bones) ||
+        !Memory::Contains(bones, 33 * 0x60) || !ReadGuestMtx34(driver + 0x78, placement)) return false;
+    try {
+        for (uint32_t i = 0; i < 33; ++i) {
+            uint32_t name = 0, node = 0;
+            if (!ReadGuestPointer(bones + i * 0x60 + 0x14, name) ||
+                !ReadGuestPointer(bones + i * 0x60 + 0x18, node)) continue;
+            std::string text;
+            for (uint32_t n = 0; n < 32 && Memory::Contains(name + n); ++n) {
+                const char c = Memory::Read8(name + n);
+                if (!c) break;
+                text += c;
+            }
+            // PAL DriverMgr's name table (808A7288) calls its head bone face_1.
+            if (text != "face_1" && text != "head" && text != "head1" && text != "face") continue;
+            Mtx34 bind{};
+            if (!ReadGuestMtx34(node + 0x70, bind)) continue;
+            const std::array<float, 3> point{bind[3], bind[7] + 8.0f, bind[11] + 8.0f};
+            for (int row = 0; row < 3; ++row)
+                eye[row] = placement[row * 4 + 3] + placement[row * 4] * point[0] +
+                    placement[row * 4 + 1] * point[1] + placement[row * 4 + 2] * point[2];
+            if (std::abs(eye[0]) < 300 && eye[1] > 10 && eye[1] < 500 && std::abs(eye[2]) < 400)
+                return true;
+        }
+    } catch (const Memory::AccessViolation&) {}
+    return false;
+}
 
 void LogAnchorLocked(uint64_t frame, const Mtx34& anchor, const Mtx34& view_from_world,
                      const KartPoseRead& kart, const Mtx34& kart_from_local) noexcept {
@@ -236,6 +314,7 @@ void MkwVRSetCameraMode(CameraMode mode) noexcept {
     g_state.mode = mode;
     g_state.anchor = {};
     g_state.hold_frames = 0;
+    g_state.stabilizer = {};
 }
 
 void MkwVRFirstPersonApplyConfiguredSettings() noexcept {
@@ -254,18 +333,24 @@ void MkwVRFirstPersonApplyConfiguredSettings() noexcept {
 }
 
 void MkwVRFirstPersonReset() noexcept {
+    MkwVRFirstPersonRestoreDriver();
     std::lock_guard lock(g_mutex);
+    g_state.mode = CameraMode::Game;
     g_state.camera_address = 0;
     g_state.anchor = {};
     g_state.hold_frames = 0;
     g_state.ever_valid_this_race = false;
     g_state.failure_logged = false;
     g_state.logged_frame = 0;
+    g_state.stabilizer = {};
+    g_state.stabilized_frame = 0;
 }
 
 void MkwVRFirstPersonUpdate(uint64_t guest_frame_index, uint32_t race_camera_address) noexcept {
+    MkwVRFirstPersonRestoreDriver();
     std::lock_guard lock(g_mutex);
     if (g_state.mode == CameraMode::Game) {
+        g_state.stabilizer = {};
         g_state.anchor = {};
         g_state.hold_frames = 0;
         return;
@@ -276,6 +361,7 @@ void MkwVRFirstPersonUpdate(uint64_t guest_frame_index, uint32_t race_camera_add
     Mtx34 kart_from_local{};
     Mtx34 anchor{};
     KartPoseRead kart{};
+    std::array<float, 3> eye{0.0f, g_state.offsets.up * g_state.units_per_meter, 0.0f};
     const char* failed_step = nullptr;
     if (race_camera_address == 0) {
         failed_step = "race camera (none updated this frame)";
@@ -285,16 +371,54 @@ void MkwVRFirstPersonUpdate(uint64_t guest_frame_index, uint32_t race_camera_add
     } else if (kart = ReadPlayerKartPose(kart_from_local); kart.failed_step != nullptr) {
         failed_step = kart.failed_step;
     } else if (g_state.mode == CameraMode::Far) {
+        g_state.stabilizer = {};
         if (!ComputeKartDioramaAnchor(view_from_world, kart_from_local,
                 RuntimeConfigFile::VrDioramaDistance(), RuntimeConfigFile::VrDioramaHeight(), anchor)) {
             failed_step = "diorama anchor math";
         }
-    } else if (!ComputeFirstPersonAnchor(view_from_world, kart_from_local,
-                                         g_state.offsets.right * g_state.units_per_meter,
-                                         g_state.offsets.up * g_state.units_per_meter,
-                                         g_state.offsets.forward * g_state.units_per_meter,
-                                         /*level_horizon=*/true, anchor, /*align_to_kart=*/true)) {
-        failed_step = "anchor math (degenerate camera or kart frame)";
+    } else {
+        // Kart::Link::GetKartPosition (8059020C) returns dynamics+68.
+        // Movement::dir (+5C), unlike the physics pose, excludes damage spin,
+        // trick rotations and visual pitch/roll. Accessor offsets are proven
+        // by GetMovement 8059077C and GetDamage 80590D20.
+        uint32_t dynamics=0,movement=0,damage=0,damageType=UINT32_MAX;
+        if (ReadGuestPointer(kart.physics+4,dynamics) && Memory::Contains(dynamics+0x68,12))
+            for (int row=0;row<3;++row) kart_from_local[row*4+3]=Memory::ReadFloat32(dynamics+0x68+row*4);
+        if (ReadGuestPointer(kart.accessor+0x28,movement) && Memory::Contains(movement+0x5c,12)) {
+            const float x=Memory::ReadFloat32(movement+0x5c), z=Memory::ReadFloat32(movement+0x64);
+            if (detail::IsFiniteFloat(&x) && detail::IsFiniteFloat(&z) && x*x+z*z>0.01f) {
+                const float inv=1.0f/std::sqrt(x*x+z*z);
+                kart_from_local[2]=x*inv; kart_from_local[10]=z*inv;
+            }
+        }
+        if (ReadGuestPointer(kart.accessor+0x2c,damage)) Memory::TryRead32(damage+0x1c,damageType);
+        const float dt=g_state.stabilized_frame && guest_frame_index>g_state.stabilized_frame
+            ? float(guest_frame_index-g_state.stabilized_frame)/60.0f : 1.0f/60.0f;
+        g_state.stabilized_frame=guest_frame_index;
+        if (detail::IsFiniteMtx34(kart_from_local))
+            kart_from_local=g_state.stabilizer.Update(kart_from_local,damageType!=UINT32_MAX,dt);
+        const bool head_found = ReadDriverEye(LocalDriver(kart), eye);
+        if (!head_found) {
+            // KartDriverDispParam contains the character's seat Y/Z for this
+            // particular vehicle. Never use the old chase-camera forward offset.
+            uint32_t params = 0, seat = 0;
+            if (ReadGuestPointer(kart.accessor, params) && ReadGuestPointer(params + 0x1c, seat) &&
+                Memory::Contains(seat, 8)) {
+                const float y = Memory::ReadFloat32(seat), z = Memory::ReadFloat32(seat + 4);
+                if (detail::IsFiniteFloat(&y) && detail::IsFiniteFloat(&z) && std::abs(y) < 400 && std::abs(z) < 400) {
+                    eye[1] += y;
+                    eye[2] = z;
+                }
+            }
+        }
+        eye[0] += g_state.offsets.right * g_state.units_per_meter;
+        // Existing configs used 1.1/1.2 as their defaults. Those now mean zero
+        // trim around the measured seat rather than 1.2m ahead of the kart.
+        if (head_found) eye[1] += (g_state.offsets.up - 1.1f) * g_state.units_per_meter;
+        eye[2] += (g_state.offsets.forward - 1.2f) * g_state.units_per_meter;
+        if (!ComputeFirstPersonAnchor(view_from_world, kart_from_local, eye[0], eye[1], eye[2],
+                                      true, anchor, true))
+            failed_step = "driver eye anchor math";
     }
 
     if (failed_step == nullptr) {
@@ -302,6 +426,9 @@ void MkwVRFirstPersonUpdate(uint64_t guest_frame_index, uint32_t race_camera_add
             ? RuntimeConfigFile::VrDioramaUnitsPerMeter() : g_state.units_per_meter};
         g_state.hold_frames = kHoldFrames;
         g_state.ever_valid_this_race = true;
+        const auto policy = MkwVRPolicyGetSnapshot();
+        if (g_state.mode == CameraMode::FirstPerson && policy.session_active && policy.scene.local_player_count == 1)
+            HideDriver(LocalDriver(kart));
         LogAnchorLocked(guest_frame_index, anchor, view_from_world, kart, kart_from_local);
         return;
     }
@@ -329,6 +456,13 @@ void MkwVRFirstPersonUpdate(uint64_t guest_frame_index, uint32_t race_camera_add
 FirstPersonAnchor MkwVRFirstPersonGetAnchor() noexcept {
     std::lock_guard lock(g_mutex);
     return g_state.anchor;
+}
+
+void MkwVRFirstPersonRestoreDriver() noexcept {
+    for (auto& model : g_hidden_models) {
+        if (model) SetDriverDraw(model, true);
+        model = 0;
+    }
 }
 
 } // namespace mkw::vr

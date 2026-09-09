@@ -22,9 +22,10 @@ enum class OpenXRControllerAction : size_t {
     Trick,
     LookBack,
     Pause,
+    Reverse,
 };
 
-inline constexpr size_t kOpenXRControllerActionCount = 11;
+inline constexpr size_t kOpenXRControllerActionCount = 12;
 
 struct OpenXRControllerActionPaths {
     std::string_view steering{};
@@ -54,56 +55,56 @@ inline constexpr OpenXRControllerActionPaths kTouchControllerActions{
     "/user/hand/left/input/thumbstick",
     "/user/hand/right/input/thumbstick",
     "/user/hand/right/input/trigger/value",
-    {"/user/hand/left/input/trigger/value", "/user/hand/left/input/squeeze/value"},
+    {"/user/hand/left/input/y/click", {}},
     "/user/hand/right/input/squeeze/value",
     {},
     "/user/hand/right/input/a/click",
     "/user/hand/right/input/b/click",
     "/user/hand/left/input/x/click",
-    "/user/hand/left/input/y/click",
-    {"/user/hand/left/input/menu/click", "/user/hand/left/input/thumbstick/click"},
+    {},
+    {"/user/hand/left/input/menu/click", "/user/hand/left/input/trigger/value"},
 };
 
 inline constexpr OpenXRControllerActionPaths kIndexControllerActions{
     "/user/hand/left/input/thumbstick",
     "/user/hand/right/input/thumbstick",
     "/user/hand/right/input/trigger/value",
-    {"/user/hand/left/input/trigger/value", "/user/hand/left/input/squeeze/value"},
+    {"/user/hand/left/input/b/click", {}},
     "/user/hand/right/input/squeeze/value",
     {},
     "/user/hand/right/input/a/click",
     "/user/hand/right/input/b/click",
     "/user/hand/left/input/a/click",
-    "/user/hand/left/input/b/click",
-    {"/user/hand/left/input/system/click", "/user/hand/left/input/thumbstick/click"},
+    {},
+    {"/user/hand/left/input/system/click", "/user/hand/left/input/trigger/value"},
 };
 
 inline constexpr OpenXRControllerActionPaths kMotionControllerActions{
     "/user/hand/left/input/thumbstick",
     "/user/hand/right/input/thumbstick",
     "/user/hand/right/input/trigger/value",
-    {"/user/hand/left/input/trigger/value", {}},
+    {"/user/hand/left/input/squeeze/click", {}},
     {},
     "/user/hand/right/input/squeeze/click",
     "/user/hand/right/input/thumbstick/click",
     "/user/hand/right/input/menu/click",
-    "/user/hand/left/input/menu/click",
+    {},
     "/user/hand/right/input/thumbstick/click",
-    {"/user/hand/left/input/menu/click", "/user/hand/left/input/thumbstick/click"},
+    {"/user/hand/left/input/menu/click", "/user/hand/left/input/trigger/value"},
 };
 
 inline constexpr OpenXRControllerActionPaths kViveControllerActions{
     "/user/hand/left/input/trackpad",
     "/user/hand/right/input/trackpad",
     "/user/hand/right/input/trigger/value",
-    {"/user/hand/left/input/trigger/value", {}},
+    {"/user/hand/left/input/squeeze/click", {}},
     {},
     "/user/hand/right/input/squeeze/click",
     "/user/hand/right/input/trigger/click",
     "/user/hand/right/input/menu/click",
-    "/user/hand/left/input/menu/click",
+    {},
     "/user/hand/right/input/trackpad/click",
-    {"/user/hand/left/input/menu/click", "/user/hand/left/input/trackpad/click"},
+    {"/user/hand/left/input/menu/click", "/user/hand/left/input/trigger/value"},
 };
 
 // A simple controller has no analog controls, but still supports menu
@@ -112,12 +113,12 @@ inline constexpr OpenXRControllerActionPaths kSimpleControllerActions{
     {},
     {},
     {},
-    {},
+    {"/user/hand/left/input/select/click", {}},
     {},
     {},
     "/user/hand/right/input/select/click",
     "/user/hand/right/input/menu/click",
-    "/user/hand/left/input/select/click",
+    {},
     "/user/hand/left/input/menu/click",
     {"/user/hand/left/input/menu/click", {}},
 };
@@ -126,14 +127,14 @@ inline constexpr OpenXRControllerActionPaths kPicoG3ControllerActions{
     "/user/hand/left/input/thumbstick",
     "/user/hand/right/input/thumbstick",
     "/user/hand/right/input/trigger/value",
-    {"/user/hand/left/input/trigger/value", {}},
+    {"/user/hand/left/input/y/click", {}},
     "/user/hand/right/input/squeeze/value",
     {},
     "/user/hand/right/input/trigger/click",
     "/user/hand/right/input/menu/click",
-    "/user/hand/left/input/menu/click",
+    "/user/hand/left/input/x/click",
     "/user/hand/right/input/thumbstick/click",
-    {"/user/hand/left/input/menu/click", "/user/hand/left/input/thumbstick/click"},
+    {"/user/hand/left/input/menu/click", "/user/hand/left/input/trigger/value"},
 };
 
 inline constexpr std::array kOpenXRControllerProfiles{

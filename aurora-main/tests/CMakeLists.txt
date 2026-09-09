@@ -67,6 +67,15 @@ if (AURORA_ENABLE_GX)
   )
 
   gtest_discover_tests(gx_fifo_tests)
+  if(WIN32)
+    add_executable(cockpit_gpu_smoke cockpit_gpu_smoke.cpp)
+    target_include_directories(cockpit_gpu_smoke PRIVATE ../include ../lib)
+    target_compile_definitions(cockpit_gpu_smoke PRIVATE AURORA TARGET_PC WEBGPU_DAWN)
+    target_compile_features(cockpit_gpu_smoke PRIVATE cxx_std_20)
+    target_link_libraries(cockpit_gpu_smoke PRIVATE fmt::fmt xxhash absl::flat_hash_map absl::btree
+      dawn::webgpu_dawn TracyClient ${AURORA_SDL3_TARGET})
+    add_test(NAME cockpit_gpu_smoke COMMAND cockpit_gpu_smoke)
+  endif()
 endif () # AURORA_ENABLE_GX
 
 # DVD API tests

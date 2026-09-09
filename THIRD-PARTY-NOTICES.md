@@ -199,6 +199,13 @@ Not code, but the documentation this project depends on:
 - [Retro Rewind](https://wiki.tockdom.com/wiki/Retro_Rewind) by ZPL - the mod distribution this
   project can build as a static profile. No Retro Rewind content is redistributed here; users
   supply their own copy.
+- [AnimalCrossing-VR-MR-Standalone](https://github.com/heurazy/AnimalCrossing-VR-MR-Standalone) -
+  reference for OpenXR hand-mesh integration and tracked-hand presentation; no source from that
+  project is compiled into this repository.
+- [Cyberpunk VR port](https://github.com/dariulone/cyberpunk-vr-port) - interaction reference for
+  squeeze-to-grab steering; no source from that project is compiled into this repository.
+- [Pulsar](https://github.com/MelgMKW/Pulsar) - reference used to verify Mario Kart Wii class
+  layouts required by the cockpit camera; no Pulsar source is compiled into this repository.
 
 ---
 

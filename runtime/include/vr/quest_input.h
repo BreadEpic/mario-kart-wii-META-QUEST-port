@@ -11,6 +11,10 @@ namespace mkw::vr {
 
 struct QuestInput {
     bool active = false;
+    bool wheel_active = false;
+    bool cockpit_controls = false;
+    bool reverse = false;
+    float wheel_steering = 0;
     float steering_x = 0, steering_y = 0;
     float tricks_x = 0, tricks_y = 0;
     float accelerate = 0, item = 0, drift = 0;
@@ -40,7 +44,7 @@ inline PADStatus MapQuestInput(const QuestInput& input, const QuestStickCalibrat
     PADStatus pad{};
     pad.err = input.active ? PAD_ERR_NONE : PAD_ERR_NO_CONTROLLER;
     if (!input.active) return pad;
-    if (input.trick && input.look_back) return pad; // X + Y opens VR settings.
+    if (QuestAxis(input.item) > 0.5f && input.trick) return pad; // X + Y opens VR settings.
     const float x = CenterQuestAxis(input.steering_x, calibration.center_x);
     const float y = CenterQuestAxis(input.steering_y, calibration.center_y);
     const float length = std::sqrt(x * x + y * y);
@@ -52,19 +56,33 @@ inline PADStatus MapQuestInput(const QuestInput& input, const QuestStickCalibrat
         pad.stickX = static_cast<int8_t>(std::lround(x * scale));
         pad.stickY = static_cast<int8_t>(std::lround(y * scale)); // OpenXR +Y is up, like GC.
     }
-    if (QuestAxis(input.accelerate) > 0.5f || input.confirm) {
+    if (input.wheel_active) {
+        pad.stickX = static_cast<int8_t>(std::lround(QuestAxis(input.wheel_steering) * 100.0f));
+        pad.stickY = 0;
+    }
+    if (QuestAxis(input.accelerate) > 0.5f || (input.confirm && !input.cockpit_controls)) {
         pad.button |= PAD_BUTTON_A;
         pad.analogA = 255;
     }
     if (input.brake) { pad.button |= PAD_BUTTON_B; pad.analogB = 255; }
     if (QuestAxis(input.item) > 0.5f) { pad.button |= PAD_TRIGGER_L; pad.triggerL = 255; }
-    if (QuestAxis(input.drift) > 0.5f) { pad.button |= PAD_TRIGGER_R; pad.triggerR = 255; }
+    if (input.cockpit_controls ? input.confirm : QuestAxis(input.drift) > 0.5f) {
+        pad.button |= PAD_TRIGGER_R; pad.triggerR = 255;
+    }
     if (input.look_back) pad.button |= PAD_BUTTON_X;
     if (input.pause) pad.button |= PAD_BUTTON_START;
     if (input.trick || QuestAxis(input.tricks_y) > 0.6f) pad.button |= PAD_BUTTON_UP;
     if (QuestAxis(input.tricks_y) < -0.6f) pad.button |= PAD_BUTTON_DOWN;
     if (QuestAxis(input.tricks_x) > 0.6f) pad.button |= PAD_BUTTON_RIGHT;
     if (QuestAxis(input.tricks_x) < -0.6f) pad.button |= PAD_BUTTON_LEFT;
+    if (input.reverse) {
+        // Native MKW brakes to a stop, then reverses while B stays held.
+        // Override throttle/drift so it also works with the accelerator held.
+        pad.button &= ~(PAD_BUTTON_A | PAD_TRIGGER_R);
+        pad.button |= PAD_BUTTON_B;
+        pad.analogA = pad.triggerR = 0;
+        pad.analogB = 255;
+    }
     return pad;
 }
 

@@ -234,6 +234,8 @@ void MkwVRFirstPersonUpdate(uint64_t guest_frame_index, uint32_t race_camera_add
 
 // Drops every captured pointer and the held anchor. Call on race entry/exit.
 void MkwVRFirstPersonReset() noexcept;
+// Guest thread only, immediately after the frame's draws have been recorded.
+void MkwVRFirstPersonRestoreDriver() noexcept;
 
 // Producer-side read. Thread-safe. A valid anchor is also what marks the mode
 // as engaged, and so what selects the first-person world scale: it is invalid

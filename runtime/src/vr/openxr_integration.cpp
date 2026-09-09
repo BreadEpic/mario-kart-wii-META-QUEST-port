@@ -10,6 +10,7 @@
 #include "runtime_log.h"
 #include "vr/mkw_vr_first_person.h"
 #include "vr/quest_input.h"
+#include "vr/steering_wheel.h"
 #include "vr/submission_wait.h"
 #include "vr/frame_delivery.h"
 #include "vr/mkw_vr_policy.h"
@@ -32,6 +33,7 @@
 #include "vr/openxr_runtime.h"
 #if defined(_WIN32)
 #include "vr/openxr_d3d12.h"
+#include "vr/openxr_hand_mesh.h"
 #else
 #include "vr/openxr_vulkan_backend.h"
 #endif
@@ -783,6 +785,8 @@ private:
         }
         if (!immersive) {
             last_immersive_ = false;
+            wheel_.Update({}, false, 0);
+            runtime_->PublishDrivingInput(false, 0, false);
             return;
         }
 
@@ -797,8 +801,46 @@ private:
             base_position_valid_ = true;
         }
         last_immersive_ = true;
+        if (!hand_meshes_loaded_) {
+            hand_meshes_loaded_ = true;
+            const bool loaded = LoadRuntimeHandMeshes(*runtime_);
+            RT_LOG(RT_TAG_RUNTIME) << "[mkw-vr] cockpit hands: "
+                << (loaded ? "Meta runtime mesh" : "controller glove fallback (Meta mesh unavailable)") << std::endl;
+        }
+        auto& cockpit = destination.cockpit;
+        cockpit.active = position_valid && base_position_valid_ && runtime_->IsSessionFocused() &&
+            MkwVRGetCameraMode() == CameraMode::FirstPerson && MkwVRFirstPersonGetAnchor().valid;
+        std::array<WheelHand, 2> hands{};
+        for (size_t hand = 0; hand < 2; ++hand) {
+            auto& target = cockpit.hands[hand];
+            target.tracked = hand ? runtime_->RightGripValid() : runtime_->LeftGripValid();
+            const auto& grip = hand ? runtime_->RightGripPose() : runtime_->LeftGripPose();
+            target.squeeze = runtime_->HandSqueeze(hand);
+            const auto position = Rotate(Conjugate(base_pose_.orientation), {
+                grip.position.x - base_pose_.position[0], grip.position.y - base_pose_.position[1],
+                grip.position.z - base_pose_.position[2]});
+            const auto rotation = Multiply(Conjugate(base_pose_.orientation),
+                {grip.orientation.x, grip.orientation.y, grip.orientation.z, grip.orientation.w});
+            float matrix[9];
+            RotationMatrix(rotation, matrix);
+            for (int row = 0; row < 3; ++row) {
+                for (int col = 0; col < 3; ++col) target.seatFromGrip[row * 4 + col] = matrix[row * 3 + col];
+                target.seatFromGrip[row * 4 + 3] = position[row];
+            }
+            hands[hand] = {position[0], position[1], position[2], target.squeeze, target.tracked};
+        }
+        const auto time = source.xr_frame.predicted_display_time;
+        const float dt = last_wheel_time_ > 0 ? float(time - last_wheel_time_) * 1.0e-9f : 1.0f / 90.0f;
+        last_wheel_time_ = time;
+        const auto wheel = wheel_.Update(hands, cockpit.active, dt);
+        cockpit.wheelAngle = wheel.angle;
+        for (int hand = 0; hand < 2; ++hand) cockpit.hands[hand].held = wheel.held[hand];
+        runtime_->PublishDrivingInput(cockpit.active, wheel.steering, wheel.held[0] || wheel.held[1]);
         Pose hand_panel{};
-        destination.handHud = position_valid && runtime_->LeftGripValid();
+        // In the cockpit, use the existing fixed forward HUD plane (including
+        // items). It follows the seated frame, not head turns or controller loss.
+        destination.handHud = MkwVRGetCameraMode() != CameraMode::FirstPerson &&
+            position_valid && runtime_->LeftGripValid();
         if (destination.handHud) {
             const auto& grip = runtime_->LeftGripPose();
             const auto offset = Rotate({grip.orientation.x, grip.orientation.y,
@@ -820,6 +862,8 @@ private:
             for (int axis = 0; axis < 3; ++axis) hand_panel.position[axis] += normal[axis];
         }
         for (uint32_t eye = 0; eye < kOpenXREyeCount; ++eye) {
+            ViewFromBase(source.xr_frame.views[eye].pose, base_pose_, position_valid, 1.0f,
+                         cockpit.eyeFromSeat[eye]);
             if (destination.handHud) {
                 ViewFromBase(source.xr_frame.views[eye].pose, hand_panel, true, 1.0f,
                              destination.handHudViewFromPanel[eye]);
@@ -839,6 +883,8 @@ private:
     }
 
     void ResetTrackingOrigin() noexcept {
+        wheel_ = {};
+        last_wheel_time_ = 0;
         base_pose_ = {};
         base_pose_valid_ = false;
         base_position_valid_ = false;
@@ -879,6 +925,9 @@ private:
     mutable std::mutex error_mutex_;
     std::string last_error_;
     Pose base_pose_{};
+    SteeringWheel wheel_;
+    XrTime last_wheel_time_ = 0;
+    bool hand_meshes_loaded_ = false;
     bool base_pose_valid_ = false;
     bool base_position_valid_ = false;
     bool last_immersive_ = false;

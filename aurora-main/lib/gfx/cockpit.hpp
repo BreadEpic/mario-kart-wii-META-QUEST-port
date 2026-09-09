@@ -1,0 +1,228 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#pragma once
+#include "common.hpp"
+#include "../webgpu/gpu.hpp"
+#include <array>
+#include <cmath>
+#include <cstring>
+#include <memory>
+#include <mutex>
+#include <vector>
+
+namespace aurora::gfx::cockpit {
+using V = std::array<float, 3>;
+using M = std::array<float, 12>;
+inline V add(V a, V b) { return {a[0]+b[0], a[1]+b[1], a[2]+b[2]}; }
+inline V sub(V a, V b) { return {a[0]-b[0], a[1]-b[1], a[2]-b[2]}; }
+inline V mul(V a, float b) { return {a[0]*b, a[1]*b, a[2]*b}; }
+inline float dot(V a, V b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+inline V cross(V a, V b) { return {a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]}; }
+inline V norm(V a) { return mul(a, 1/std::sqrt(std::max(dot(a,a), 1e-10f))); }
+inline V point(const float* m, V p) {
+  return {m[0]*p[0]+m[1]*p[1]+m[2]*p[2]+m[3], m[4]*p[0]+m[5]*p[1]+m[6]*p[2]+m[7],
+          m[8]*p[0]+m[9]*p[1]+m[10]*p[2]+m[11]};
+}
+inline M identity() { return {1,0,0,0,0,1,0,0,0,0,1,0}; }
+inline M compose(const M& a, const M& b) {
+  M result{};
+  for(int r=0;r<3;++r) {
+    for(int c=0;c<3;++c) for(int k=0;k<3;++k) result[r*4+c]+=a[r*4+k]*b[k*4+c];
+    result[r*4+3]=a[r*4+3];
+    for(int k=0;k<3;++k) result[r*4+3]+=a[r*4+k]*b[k*4+3];
+  }
+  return result;
+}
+inline M inverse(const M& m) {
+  M out=identity();
+  for(int r=0;r<3;++r) for(int c=0;c<3;++c) out[r*4+c]=m[c*4+r];
+  const auto p=point(out.data(), {-m[3],-m[7],-m[11]});
+  out[3]=p[0];out[7]=p[1];out[11]=p[2];return out;
+}
+inline M from_pose(const float* p) {
+  const float x=p[0],y=p[1],z=p[2],w=p[3];
+  return {1-2*(y*y+z*z),2*(x*y-z*w),2*(x*z+y*w),p[4],
+          2*(x*y+z*w),1-2*(x*x+z*z),2*(y*z-x*w),p[5],
+          2*(x*z-y*w),2*(y*z+x*w),1-2*(x*x+y*y),p[6]};
+}
+struct HandMesh {
+  std::vector<AuroraVRHandVertex> vertices;
+  std::vector<uint16_t> indices;
+  std::array<M,26> bind{}, inverseBind{};
+  std::array<int32_t,26> parents{};
+};
+inline std::mutex meshMutex;
+inline std::array<std::shared_ptr<const HandMesh>,2> meshes;
+struct Vertex { V position, color; };
+inline void triangle(std::vector<Vertex>& vertices, V a, V b, V c, V color) {
+  const V normal=norm(cross(sub(b,a),sub(c,a)));
+  const float light=0.55f+0.45f*std::abs(dot(normal,norm({0.3f,0.8f,0.5f})));
+  color=mul(color,light);
+  vertices.insert(vertices.end(),{{a,color},{b,color},{c,color}});
+}
+inline void tube(std::vector<Vertex>& v, V a, V b, float radius, V color, int sides=8) {
+  const auto direction=norm(sub(b,a));
+  const auto u=norm(cross(direction,std::abs(direction[1])<0.9f?V{0,1,0}:V{1,0,0}));
+  const auto w=cross(direction,u);
+  for(int i=0;i<sides;++i) {
+    const float t=float(i)*6.2831853f/sides, t1=float(i+1)*6.2831853f/sides;
+    const V o=mul(add(mul(u,std::cos(t)),mul(w,std::sin(t))),radius);
+    const V p=mul(add(mul(u,std::cos(t1)),mul(w,std::sin(t1))),radius);
+    triangle(v,add(a,o),add(b,o),add(b,p),color);
+    triangle(v,add(a,o),add(b,p),add(a,p),color);
+    triangle(v,a,add(a,p),add(a,o),color);
+    triangle(v,b,add(b,o),add(b,p),color);
+  }
+}
+inline void ellipsoid(std::vector<Vertex>& vertices,V center,V radii,V color) {
+  const auto surface=[&](int ring,int segment) {
+    const float latitude=float(ring)*3.14159265f/6,longitude=float(segment)*6.2831853f/12;
+    return add(center,{radii[0]*std::sin(latitude)*std::cos(longitude),radii[1]*std::cos(latitude),
+        radii[2]*std::sin(latitude)*std::sin(longitude)});
+  };
+  for(int ring=0;ring<6;++ring) for(int segment=0;segment<12;++segment) {
+    const auto a=surface(ring,segment),b=surface(ring+1,segment),c=surface(ring+1,segment+1),d=surface(ring,segment+1);
+    if(ring>0) triangle(vertices,a,b,d,color);
+    if(ring<5) triangle(vertices,b,c,d,color);
+  }
+}
+inline void glove(std::vector<Vertex>& v, const AuroraCockpitHand& hand, int side) {
+  const size_t start=v.size();
+  const V white{0.91f,0.95f,1.0f};
+  // Rounded palm and individually articulated fingers in grip-local metres.
+  ellipsoid(v,{0,0,0},{0.041f,0.018f,0.043f},white);
+  const float curl=std::clamp(hand.held?0.85f:hand.squeeze,0.0f,1.0f);
+  for(int finger=0;finger<4;++finger) {
+    V a{-0.025f+finger*0.017f,0,-0.028f};
+    const float length=finger==0||finger==3?0.021f:0.026f;
+    for(int joint=0;joint<3;++joint) {
+      const float angle=curl*(0.55f+joint*0.8f);
+      V b=add(a,{0,-std::sin(angle)*length,-std::cos(angle)*length});
+      tube(v,a,b,0.008f,white);
+      ellipsoid(v,b,{0.008f,0.008f,0.008f},white);a=b;
+    }
+  }
+  const float sign=side? -1.0f:1.0f;
+  tube(v,{sign*0.025f,0,0.012f},{sign*0.048f,-0.012f,-0.012f},0.010f,white);
+  tube(v,{sign*0.048f,-0.012f,-0.012f},{sign*(0.055f-0.021f*curl),-0.018f,-0.041f},0.009f,white);
+  for(size_t i=start;i<v.size();++i) v[i].position=point(hand.seatFromGrip,v[i].position);
+}
+inline void runtime_hand(std::vector<Vertex>& out, const AuroraCockpitHand& hand, const HandMesh& mesh) {
+  std::array<M,26> posed{}, skin{};
+  std::array<bool,26> done{};
+  const float curl=std::clamp(hand.held?0.85f:hand.squeeze,0.0f,1.0f);
+  // Bind hierarchy is supplied by the runtime. Root and wrist stay rigid;
+  // finger joints curl locally when controllers provide squeeze input.
+  for(int pass=0;pass<26;++pass) for(int j=0;j<26;++j) {
+    if(done[j]) continue;
+    const int parent=mesh.parents[j];
+    if(parent>=0&&parent<26&&!done[parent]) continue;
+    M local=parent>=0&&parent<26?compose(mesh.inverseBind[parent],mesh.bind[j]):mesh.bind[j];
+    const bool fingerJoint=j>=2 && j!=6 && j!=11 && j!=16 && j!=21;
+    if(fingerJoint) {
+      const float a=curl*(j<6?0.3f:0.75f),c=std::cos(a),s=std::sin(a);
+      local=compose(local,M{1,0,0,0,0,c,-s,0,0,s,c,0});
+    }
+    posed[j]=parent>=0&&parent<26?compose(posed[parent],local):local;
+    skin[j]=compose(mesh.inverseBind[1],compose(posed[j],mesh.inverseBind[j]));
+    done[j]=true;
+  }
+  std::vector<V> points(mesh.vertices.size());
+  for(size_t i=0;i<points.size();++i) {
+    const auto& v=mesh.vertices[i]; V p{}; float total=0;
+    for(int w=0;w<4;++w) if(v.joints[w]>=0&&v.joints[w]<26&&done[v.joints[w]]&&v.weights[w]>0) {
+      p=add(p,mul(point(skin[v.joints[w]].data(),{v.position[0],v.position[1],v.position[2]}),v.weights[w]));
+      total+=v.weights[w];
+    }
+    if(total>0) p=mul(p,1/total);
+    p=add(p,{0,0,0.04f}); // wrist behind the controller grip/palm origin.
+    points[i]=point(hand.seatFromGrip,p);
+  }
+  for(size_t i=0;i+2<mesh.indices.size();i+=3)
+    triangle(out,points[mesh.indices[i]],points[mesh.indices[i+1]],points[mesh.indices[i+2]],{0.91f,0.95f,1.0f});
+}
+inline std::vector<Vertex> geometry(const AuroraCockpit& cockpit) {
+  std::vector<Vertex> vertices;vertices.reserve(12000);
+  // The visible radius and position must match runtime/vr/steering_wheel.h.
+  const auto rim=[&](float angle) -> V { return {0.18f*std::cos(angle),-0.30f+0.18f*std::sin(angle),-0.42f}; };
+  for(int i=0;i<64;++i) {
+    const float angle=float(i)*6.2831853f/64-cockpit.wheelAngle;
+    const V color=i>=15&&i<=17?V{0.2f,0.9f,0.8f}:V{0.14f,0.17f,0.20f};
+    tube(vertices,rim(angle),rim(angle+6.2831853f/64),0.016f,color,6);
+  }
+  for(float a : {0.0f,3.14159265f,4.71238898f})
+    tube(vertices,{0,-0.30f,-0.42f},rim(a-cockpit.wheelAngle),0.011f,{0.45f,0.48f,0.52f});
+  tube(vertices,{0,-0.30f,-0.445f},{0,-0.30f,-0.395f},0.035f,{0.12f,0.65f,0.61f},16);
+  std::array<std::shared_ptr<const HandMesh>,2> current;
+  { std::lock_guard lock(meshMutex);current=meshes; }
+  for(int side=0;side<2;++side) if(cockpit.hands[side].tracked) {
+    if(current[side]) runtime_hand(vertices,cockpit.hands[side],*current[side]);
+    else glove(vertices,cockpit.hands[side],side);
+  }
+  return vertices;
+}
+inline wgpu::RenderPipeline pipeline;
+inline uint32_t pipelineSamples=0;
+inline wgpu::TextureFormat pipelineFormat{};
+inline void shutdown() { pipeline=nullptr;pipelineSamples=0; }
+inline void render(wgpu::CommandEncoder& cmd,const StereoReplayFrame& frame,uint32_t eye) {
+  if(!frame.cockpit.active) return;
+  using namespace webgpu;
+  const auto& target=frame.eyes[eye].target;
+  const auto format=g_graphicsConfig.surfaceConfiguration.format;
+  if(!pipeline||pipelineSamples!=target.msaaSamples||pipelineFormat!=format) {
+    wgpu::ShaderSourceWGSL source{};
+    source.code=R"(
+      struct Out { @builtin(position) position: vec4f, @location(0) color: vec3f };
+      @vertex fn vs(@location(0) position: vec4f, @location(1) color: vec3f) -> Out {
+        var o: Out; o.position=position; o.color=color; return o;
+      }
+      @fragment fn fs(i: Out) -> @location(0) vec4f { return vec4f(i.color,1); }
+    )";
+    wgpu::ShaderModuleDescriptor md{};md.nextInChain=&source;md.label="VR cockpit hands and wheel";
+    auto shader=g_device.CreateShaderModule(&md);
+    const wgpu::VertexAttribute attrs[]={{.format=wgpu::VertexFormat::Float32x4,.offset=0,.shaderLocation=0},
+      {.format=wgpu::VertexFormat::Float32x3,.offset=16,.shaderLocation=1}};
+    const wgpu::VertexBufferLayout layout{.arrayStride=28,.attributeCount=2,.attributes=attrs};
+    const wgpu::ColorTargetState color{.format=format};
+    const wgpu::FragmentState fragment{.module=shader,.entryPoint="fs",.targetCount=1,.targets=&color};
+    const wgpu::DepthStencilState depth{.format=g_graphicsConfig.depthFormat,.depthWriteEnabled=true,.depthCompare=wgpu::CompareFunction::LessEqual};
+    wgpu::RenderPipelineDescriptor desc{};desc.label="VR cockpit";
+    desc.vertex={.module=shader,.entryPoint="vs",.bufferCount=1,.buffers=&layout};
+    desc.fragment=&fragment;desc.depthStencil=&depth;desc.multisample.count=target.msaaSamples;
+    desc.primitive.topology=wgpu::PrimitiveTopology::TriangleList;
+    pipeline=g_device.CreateRenderPipeline(&desc);pipelineSamples=target.msaaSamples;pipelineFormat=format;
+  }
+  const auto vertices=geometry(frame.cockpit);
+  struct ClipVertex { float p[4]; V color; };
+  std::vector<ClipVertex> clip(vertices.size());
+  const auto& projection=frame.eyes[eye].projection;
+  for(size_t i=0;i<clip.size();++i) {
+    const auto p=point(frame.cockpit.eyeFromSeat[eye],vertices[i].position);
+    clip[i]={{projection.m0[0]*p[0]+projection.m0[2]*p[2],projection.m1[1]*p[1]+projection.m1[2]*p[2],
+      -p[2]*1.004016f-0.0200803f,-p[2]},vertices[i].color};
+  }
+  const wgpu::BufferDescriptor bd{.label="VR cockpit vertices",.usage=wgpu::BufferUsage::Vertex,
+      .size=clip.size()*sizeof(ClipVertex),.mappedAtCreation=true};
+  auto buffer=g_device.CreateBuffer(&bd);
+  std::memcpy(buffer.GetMappedRange(),clip.data(),clip.size()*sizeof(ClipVertex));buffer.Unmap();
+  const wgpu::RenderPassColorAttachment attachment{.view=target.colorView,.resolveTarget=target.resolveView,
+    .loadOp=wgpu::LoadOp::Load,.storeOp=wgpu::StoreOp::Store};
+  const wgpu::RenderPassDepthStencilAttachment depth{.view=target.depthView,.depthLoadOp=wgpu::LoadOp::Clear,
+    .depthStoreOp=wgpu::StoreOp::Store,.depthClearValue=1.0f};
+  const wgpu::RenderPassDescriptor pd{.label="VR cockpit overlay",.colorAttachmentCount=1,.colorAttachments=&attachment,.depthStencilAttachment=&depth};
+  auto pass=cmd.BeginRenderPass(&pd);pass.SetPipeline(pipeline);pass.SetVertexBuffer(0,buffer);pass.Draw(clip.size());pass.End();
+}
+} // namespace aurora::gfx::cockpit
+
+extern "C" void aurora_set_vr_hand_mesh(uint32_t hand,const AuroraVRHandVertex* vertices,uint32_t vertexCount,
+    const uint16_t* indices,uint32_t indexCount,const float* bindPoses,const int32_t* parents,uint32_t jointCount) {
+  using namespace aurora::gfx::cockpit;
+  if(hand>=2) return;
+  std::shared_ptr<HandMesh> mesh;
+  if(vertices&&indices&&bindPoses&&parents&&jointCount==26&&vertexCount>0&&vertexCount<=65535&&indexCount<=100000&&indexCount%3==0) {
+    for(uint32_t i=0;i<indexCount;++i) if(indices[i]>=vertexCount) return;
+    mesh=std::make_shared<HandMesh>();mesh->vertices.assign(vertices,vertices+vertexCount);mesh->indices.assign(indices,indices+indexCount);
+    for(int j=0;j<26;++j) { mesh->bind[j]=from_pose(bindPoses+j*7);mesh->inverseBind[j]=inverse(mesh->bind[j]);mesh->parents[j]=parents[j]; }
+  }
+  std::lock_guard lock(meshMutex);meshes[hand]=std::move(mesh);
+}

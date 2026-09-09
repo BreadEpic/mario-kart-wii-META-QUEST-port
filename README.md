@@ -37,15 +37,42 @@ The graphics layer is built on
 Play at several times the console's resolution.
 
 **OpenXR VR.**
-Windows builds render through a D3D12 OpenXR runtime without CPU readback. Press the right Quest
-stick to switch between the original game camera, first person, and a distant diorama view. The
-track map and item panel can follow the left hand. Quest Touch controls include steering, throttle,
-brake, drifting, items, tricks, look back, menu navigation, and an in-game stick calibration page.
-The English VR settings menu also provides per-eye resolution presets, sharp rendering, FPS display,
-camera placement, world scale, and HUD placement. Standard bindings cover Meta/Oculus Touch,
-Touch Pro, Valve Index, Microsoft Mixed Reality, Samsung Odyssey, HTC Vive, PICO, and
-simple-controller profiles.
+Windows builds render through a D3D12 OpenXR runtime without CPU readback. Every race starts with
+the original game camera; click the right stick to cycle through the original view, a true
+driver-head cockpit view, and a distant diorama view. Cockpit mode hides the local driver, anchors
+the race HUD in front of the seat, and adds tracked hands and a physical two-handed steering wheel.
+Outside the cockpit, the circuit map and item panel can follow the left hand. Camera motion from
+hits and tricks is stabilised for comfort without detaching the view from the kart.
+
+The English VR settings menu provides per-eye resolution presets, sharp rendering, FPS display,
+camera placement, world scale, HUD placement, stick deadzone calibration, and live controller
+diagnostics. Standard bindings cover Meta/Oculus Touch, Touch Pro, Valve Index, Microsoft Mixed
+Reality, Samsung Odyssey, HTC Vive, PICO, and simple-controller profiles.
 See [`OPENXR.md`](OPENXR.md) for Windows setup, configuration, controls, and current limitations.
+
+### Quest Touch controls
+
+| Control | Original / diorama cameras | First-person cockpit |
+| --- | --- | --- |
+| Left stick | Steer; navigate menus | Steer when the wheel is released; navigate menus |
+| Right trigger | Accelerate | Accelerate |
+| Left trigger, held | Brake, then reverse | Brake, then reverse |
+| A | Accelerate / confirm | Hop and drift / confirm in menus |
+| B | Brake / cancel | Brake / cancel |
+| Y | Use or hold the current item | Use or hold the current item |
+| X | Trick or bike wheelie | Trick or bike wheelie |
+| Right stick directions | Directional tricks and bike wheelies | Directional tricks and bike wheelies |
+| Right grip | Hop / drift | Grab the steering wheel with the right hand |
+| Left grip | No driving action | Grab the steering wheel with the left hand |
+| Right stick click | Cycle original, cockpit, and diorama cameras | Cycle original, cockpit, and diorama cameras |
+| Menu button | Pause | Pause |
+| X + Y | Open or close VR settings without sending either action to the game | Same |
+
+In cockpit mode, bring either tracked hand near the rim and squeeze to grab it. One or both hands
+can steer through a quarter-turn in either direction. Moving a held hand through the centre keeps
+the grab active, and releasing both hands returns steering to the left stick. The tracked hands use
+the Meta runtime hand mesh when available and articulated glove models otherwise. `F10` also opens
+the VR settings from the desktop mirror.
 
 **Music ducking.** 
 Start playing something else, Spotify, a YouTube video, and
@@ -120,7 +147,7 @@ regions, patched executables) is rejected outright.
 
 ## Installing
 
-Download `WiiCompiled-VR-Portable-v0.4.3.zip` from the
+Download `WiiCompiled-VR-Portable-v0.5.0.zip` from the
 [latest release](https://github.com/heurazy/mario-kart-wii-VR-port/releases/latest). This is the only
 published package and includes the English installer plus the integrated Wheel Wizard launcher.
 Extract the complete archive, run `WiiCompiled-VR-Setup.exe`, choose the ROM, keep portable mode
@@ -240,6 +267,12 @@ All translated output is verified against real hardware behavior and most import
   distribution this project supports.
 - **[Wheel Wizard](https://github.com/TeamWheelWizard/WheelWizard)** - the mod manager this
   project integrates with as a launch backend.
+- **[AnimalCrossing-VR-MR-Standalone](https://github.com/heurazy/AnimalCrossing-VR-MR-Standalone)**
+  - reference for OpenXR hand-mesh integration and tracked-hand presentation.
+- **[Cyberpunk VR port](https://github.com/dariulone/cyberpunk-vr-port)** - reference for the
+  squeeze-to-grab steering interaction.
+- **[Pulsar](https://github.com/MelgMKW/Pulsar)** - Mario Kart Wii class-layout reference used to
+  verify the driver, kart, camera, and damage structures used by cockpit mode.
 - Everyone in the static recompilation community.
 
 Bundled third-party components and their licenses live in

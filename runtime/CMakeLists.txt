@@ -355,6 +355,11 @@ target_compile_definitions(mkw_quest_input_tests PRIVATE TARGET_PC)
 target_compile_features(mkw_quest_input_tests PRIVATE cxx_std_17)
 add_test(NAME mkw_quest_input_tests COMMAND mkw_quest_input_tests)
 
+add_executable(mkw_steering_wheel_tests "${CMAKE_CURRENT_LIST_DIR}/tests/steering_wheel_tests.cpp")
+target_include_directories(mkw_steering_wheel_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+target_compile_features(mkw_steering_wheel_tests PRIVATE cxx_std_20)
+add_test(NAME mkw_steering_wheel_tests COMMAND mkw_steering_wheel_tests)
+
 add_executable(mkw_openxr_controller_profiles_tests
     "${CMAKE_CURRENT_LIST_DIR}/tests/openxr_controller_profiles_tests.cpp")
 target_include_directories(mkw_openxr_controller_profiles_tests PRIVATE

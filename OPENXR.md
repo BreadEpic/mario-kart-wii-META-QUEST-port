@@ -51,19 +51,29 @@ The first-person values control the camera described below and are also availabl
 
 ## Camera and HUD
 
-During an immersive race, click the right thumbstick to cycle through the original game camera,
-first person, and a distant camera. The click is latched, so holding the stick advances only once.
-Menus do not consume camera changes. Profiles without a right-stick click keep their normal camera.
+Every race starts with the original game camera. During an immersive race, click the right
+thumbstick to cycle through the original camera, the first-person cockpit, and the distant diorama
+camera. The click is latched, so holding the stick advances only once. Menus do not consume camera
+changes. Profiles without a right-stick click keep their normal camera.
 
-With `hud_virtual_screen = true`, the complete race HUD, including the circuit minimap, follows the
-left controller as a 30 cm panel above the hand and faces the headset. If tracking or focus is lost,
-the HUD returns to the normal virtual screen. Menus retain their existing presentation.
+With `hud_virtual_screen = true`, the complete race HUD, including the circuit minimap and item
+roulette, follows the left controller as a 30 cm panel in the original and diorama cameras. In the
+first-person cockpit it is anchored in front of the seat, independently of controller tracking and
+head turns. If tracking or focus is lost, the HUD returns to the normal virtual screen. Menus retain
+their existing presentation.
 
-The default view is a small diorama: the headset follows the game's chase camera and
-`world_units_per_meter = 500` makes the track read like a tabletop scene. Enabling `first_person`
-moves the view to the Player 1 driver's head and uses the authored scale of 10 game units per metre.
-The game's own transforms are not modified; Aurora composes the VR view and eye transforms around
-them.
+The first-person view is placed at Player 1's authored head bone and hides only that driver's model.
+If a vehicle does not expose the expected head bone, its driver-seat parameters provide the
+fallback. Position follows the kart simulation exactly, while impact rotations are held and blended
+back for comfort. The diorama uses a much larger world scale and follows the kart's centre and
+driving direction. The game's own transforms are not modified; Aurora composes the VR view and eye
+transforms around them.
+
+Cockpit mode draws a 36 cm steering wheel and tracked controller hands in the seated frame. Squeeze
+either grip near the rim to grab it; one or both hands can steer, and a quarter-turn reaches full
+lock. The grab tolerates broad forward/back movement and stays active when a hand crosses the wheel
+centre. Releasing both grips returns steering to the left stick. The renderer uses the Meta hand
+mesh extension when available and articulated glove models as a fallback.
 
 ## Controller compatibility
 
@@ -88,16 +98,18 @@ controller without analog inputs remains usable for menu navigation. The profile
 
 | Controller control | In-game action |
 | --- | --- |
-| Left stick | Steer and navigate menus; vertical input also aims items |
-| Right trigger or A | Accelerate / confirm |
-| B | Brake, reverse / cancel |
-| Right squeeze | Hop / drift in manual drift mode |
-| Left trigger or left squeeze | Use or hold an item |
+| Left stick | Steer and navigate menus; in cockpit it steers after both hands release the wheel |
+| Right trigger | Accelerate |
+| Left trigger, held | Brake, then reverse in every camera; overrides held acceleration and drift |
+| A | Accelerate / confirm outside cockpit; hop / drift in cockpit; confirm in menus |
+| B | Brake / cancel |
+| Y | Use or hold an item |
 | X | Trick / bike wheelie |
 | Right stick directions | Directional tricks; vertical input starts or ends bike wheelies |
-| Y | Look backward |
-| Left menu button or stick click | Pause |
+| Left and right squeeze | Grab the physical wheel in cockpit; right squeeze hops/drifts outside cockpit |
+| Left menu button | Pause |
 | Right stick click | Cycle VR cameras |
+| X + Y | Open or close VR settings without passing either action to gameplay |
 
 The OpenXR system button keeps its system function. Player 1 uses the VR action set while the
 session is focused; the normal keyboard/gamepad path resumes when VR input is unavailable. Players

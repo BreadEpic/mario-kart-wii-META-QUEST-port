@@ -121,15 +121,42 @@ typedef enum {
  * forwarded unchanged to the internal stereo output sink. contentTag must
  * match the tag latched by aurora_end_frame_tagged() for immersive replay.
  */
-typedef struct {
-  uint64_t frameToken;
+  typedef struct {
+    bool tracked;
+    bool held;
+    float squeeze;
+    float seatFromGrip[12];
+  } AuroraCockpitHand;
+
+  typedef struct {
+    bool active;
+    float wheelAngle;
+    float eyeFromSeat[AURORA_STEREO_EYE_COUNT][12];
+    AuroraCockpitHand hands[2];
+  } AuroraCockpit;
+
+  typedef struct {
+    float position[3];
+    int16_t joints[4];
+    float weights[4];
+  } AuroraVRHandVertex;
+
+  // Copies optional runtime-provided Meta hand meshes. Null clears to the
+  // controller-driven procedural glove fallback. Bind poses: x,y,z,w,px,py,pz.
+  void aurora_set_vr_hand_mesh(uint32_t hand, const AuroraVRHandVertex* vertices, uint32_t vertexCount,
+                               const uint16_t* indices, uint32_t indexCount,
+                               const float* bindPoses, const int32_t* parents, uint32_t jointCount);
+
+  typedef struct {
+    uint64_t frameToken;
   AuroraStereoEye eyes[AURORA_STEREO_EYE_COUNT];
   // Appended to preserve the frameToken/eyes prefix used by older providers.
   AuroraStereoFrameMode mode;
   uint64_t contentTag;
   // Optional hand HUD, in metres and independent of scene scale/anchor.
   bool handHud;
-  float handHudViewFromPanel[AURORA_STEREO_EYE_COUNT][12];
+    float handHudViewFromPanel[AURORA_STEREO_EYE_COUNT][12];
+    AuroraCockpit cockpit;
 } AuroraStereoFrame;
 
 /**

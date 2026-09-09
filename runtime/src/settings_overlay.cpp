@@ -803,7 +803,7 @@ void DrawVrStickSettings(const mkw::vr::QuestInput& input) {
 void DrawVrSettings() {
     const auto input = mkw::vr::ReadQuestInputSnapshot();
     static bool chordHeld = false;
-    const bool chord = input.active && input.trick && input.look_back;
+    const bool chord = input.active && mkw::vr::QuestAxis(input.item) > 0.5f && input.trick;
     if (chord && !chordHeld) SetVrSettingsVisible(!g_vrSettingsVisible);
     chordHeld = chord;
     auto& io = ImGui::GetIO();
@@ -858,10 +858,15 @@ void DrawVrSettings() {
                 if (ImGui::Combo("View", &mode, modes, 3))
                     mkw::vr::MkwVRSetCameraMode(static_cast<mkw::vr::CameraMode>(mode));
                 ImGui::TextDisabled("Press the right stick to switch views.");
+                ImGui::TextWrapped("Races start in the original camera. Hold the left trigger to brake and reverse in any camera. Press Y to use an item. The menu button still pauses the game.");
                 if (mode == 1) {
                     bool changed = false;
-                    changed |= ImGui::SliderFloat("Eye height", &g_vrFirstPersonHeadUp, 0.1f, 2.0f, "%.2f m");
-                    changed |= ImGui::SliderFloat("Eye position forward", &g_vrFirstPersonHeadForward, -1.0f, 3.0f, "%.2f m");
+                    float eyeUp = g_vrFirstPersonHeadUp - 1.1f;
+                    float eyeForward = g_vrFirstPersonHeadForward - 1.2f;
+                    changed |= ImGui::SliderFloat("Eye height adjustment", &eyeUp, -0.5f, 0.5f, "%.2f m");
+                    changed |= ImGui::SliderFloat("Eye forward adjustment", &eyeForward, -0.5f, 0.5f, "%.2f m");
+                    g_vrFirstPersonHeadUp = eyeUp + 1.1f;
+                    g_vrFirstPersonHeadForward = eyeForward + 1.2f;
                     changed |= ImGui::SliderFloat("Horizontal offset", &g_vrFirstPersonHeadRight, -0.5f, 0.5f, "%.2f m");
                     if (ImGui::Button("Reset seat position")) {
                         g_vrFirstPersonHeadUp = 1.1f; g_vrFirstPersonHeadForward = 1.2f;
@@ -873,7 +878,8 @@ void DrawVrSettings() {
                         RuntimeConfigFile::SetVrFirstPersonHeadRightMeters(g_vrFirstPersonHeadRight);
                         mkw::vr::MkwVRFirstPersonApplyConfiguredSettings();
                     }
-                    ImGui::TextWrapped("Move the eyes forward if the driver remains in front of you. Placement can vary by character and vehicle.");
+                    ImGui::TextWrapped("The view follows the driver's seat and hides the local driver. Recenter while sitting upright and looking straight ahead.");
+                    ImGui::TextWrapped("Hold either grip near the wheel rim to steer with your hands. Release both grips to use the left stick. Right trigger: accelerate. Left trigger: brake / reverse. Y: item. X: trick. A: hop / drift. B: brake. Gripped hands can move 80 cm forward or back from the wheel plane.");
                 }
                 if (mode == 2) {
                     float distance = RuntimeConfigFile::VrDioramaDistance() / 100;

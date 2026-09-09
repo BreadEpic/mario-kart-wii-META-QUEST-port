@@ -5,6 +5,7 @@
 // kart matrices into the relocation Aurora composes onto each eye.
 
 #include "vr/mkw_vr_first_person.h"
+#include "vr/cockpit_stabilizer.h"
 
 #include <cmath>
 #include <initializer_list>
@@ -194,6 +195,24 @@ void TestDegenerateKartPoseIsRejected() {
 
 int main() {
     using namespace mkw::vr;
+    CockpitStabilizer stable;
+    auto simulation=KartAt(100,20,300);
+    auto seated=stable.Update(simulation,false,1.0f/60);
+    CheckNear(seated[3],100,"cockpit follows simulation position before impact");
+    auto hit=simulation; hit[3]=180;hit[7]=160;hit[2]=1;hit[10]=0;
+    for(int i=0;i<90;++i) seated=stable.Update(hit,true,1.0f/60);
+    CheckNear(seated[3],180,"impact keeps cockpit attached to kart horizontally");
+    CheckNear(seated[7],160,"cockpit follows simulation elevation without visual shake");
+    CheckNear(seated[2],0,"impact cannot spin cockpit yaw");
+    seated=stable.Update(hit,false,1.0f/60);
+    CheckNear(seated[3],180,"damage recovery cannot leave a positional offset");
+    Check(seated[2]>0&&seated[2]<1,"damage recovery still blends orientation");
+    for(int i=0;i<150;++i) seated=stable.Update(hit,false,1.0f/60);
+    CheckNear(seated[3],180,"seat returns to kart after impact",0.1f);
+    CheckNear(seated[2],1,"seat returns to driving direction",0.01f);
+    hit[3]=10000;
+    seated=stable.Update(hit,true,1.0f/60);
+    CheckNear(seated[3],10000,"respawn relocation cannot leave camera behind");
     const auto diorama = ComputeDioramaAnchor(2000.0f, 1600.0f);
     const auto eye = detail::TransformPoint(diorama, 0.0f, 1600.0f, 2000.0f);
     CheckNear(eye.x, 0.0f, "diorama eye x");

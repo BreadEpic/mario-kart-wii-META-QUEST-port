@@ -50,6 +50,7 @@ bool ReadQuestPad(PADStatus& output, bool blocked) noexcept {
     }
     auto pad = MapQuestInput(snapshot, calibration);
     pad.button |= pending_buttons;
+    if (snapshot.reverse) pad.button &= ~(PAD_BUTTON_A | PAD_TRIGGER_R);
     if (pad.button & PAD_BUTTON_A) pad.analogA = 255;
     if (pad.button & PAD_BUTTON_B) pad.analogB = 255;
     if (pad.button & PAD_TRIGGER_L) pad.triggerL = 255;

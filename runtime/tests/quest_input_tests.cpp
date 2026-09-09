@@ -45,13 +45,31 @@ int main() {
     Check(MapQuestInput(input, {0.25f, 1, 0, 0}).stickX == 0, "larger deadzone rejects stronger drift");
     input = {}; input.active = true;
     input.accelerate = 1; input.item = 1; input.drift = 1;
+    input.wheel_active = true; input.wheel_steering = 0.05f;
+    Check(MapQuestInput(input, calibrated).stickX == 5, "wheel bypasses stick drift calibration and deadzone");
+    input.wheel_steering = -1;
+    Check(MapQuestInput(input).stickX == -100, "wheel reaches full left lock");
+    input.wheel_active = false;
     pad = MapQuestInput(input);
     Check(pad.button == (PAD_BUTTON_A | PAD_TRIGGER_L | PAD_TRIGGER_R), "accelerate, item and drift work together");
     Check(pad.analogA == 255 && pad.triggerL == 255 && pad.triggerR == 255, "GC analog channels agree with buttons");
+    input.trick = true;
+    Check(MapQuestInput(input).button == 0, "X + Y opens VR settings without using the item");
     input = {}; input.active = true;
     input.confirm = true; input.brake = true; input.look_back = true; input.pause = true;
     pad = MapQuestInput(input);
     Check(pad.button == (PAD_BUTTON_A | PAD_BUTTON_B | PAD_BUTTON_X | PAD_BUTTON_START), "face buttons and pause mapping");
+    QuestInput cockpit{};cockpit.active=true;cockpit.cockpit_controls=true;
+    cockpit.wheel_active=true;cockpit.wheel_steering=0.7f;cockpit.confirm=true;cockpit.accelerate=1;
+    pad=MapQuestInput(cockpit);
+    Check((pad.button&(PAD_BUTTON_A|PAD_TRIGGER_R))==(PAD_BUTTON_A|PAD_TRIGGER_R)&&pad.stickX==70,
+          "cockpit A drifts while accelerating and holding the wheel");
+    cockpit.confirm=false;cockpit.drift=1;
+    Check(!(MapQuestInput(cockpit).button&PAD_TRIGGER_R),"grips cannot trigger cockpit drift");
+    cockpit.accelerate=0;cockpit.confirm=true;
+    Check(!(MapQuestInput(cockpit).button&PAD_BUTTON_A),"cockpit A is reserved for drift, not acceleration");
+    cockpit.brake=true;
+    Check(MapQuestInput(cockpit).button&PAD_BUTTON_B,"cockpit B remains available for braking");
     input.look_back = false; input.trick = true;
     Check((MapQuestInput(input).button & PAD_BUTTON_UP) != 0, "X alone still triggers a trick");
     input = {}; input.active = true;
@@ -86,7 +104,7 @@ int main() {
     std::this_thread::sleep_for(std::chrono::milliseconds(280));
     Check(!ReadQuestPad(result, false), "stalled XR loop expires input");
     Check(!ReadQuestInputSnapshot().active, "stalled XR input also expires in VR menu");
-    input = {}; input.active = true; input.trick = true; input.look_back = true;
+    input = {}; input.active = true; input.item = 1; input.trick = true;
     input.accelerate = 1; input.steering_x = 1;
     pad = MapQuestInput(input);
     Check(pad.button == 0 && pad.stickX == 0, "VR menu chord does not trigger gameplay actions");
@@ -99,6 +117,17 @@ int main() {
     Check(ReadQuestInputSnapshot().steering_x == -0.1f, "diagnostics retain raw stick values");
     SetQuestStickCalibration({});
     PublishQuestInput({});
+    for(bool firstPerson : {false,true}) {
+        input={};input.active=true;input.cockpit_controls=firstPerson;
+        input.accelerate=1;input.confirm=true;input.drift=1;
+        PublishQuestInput(input); // Leave a pending accelerator/drift tap.
+        input.reverse=true;PublishQuestInput(input);
+        Check(ReadQuestPad(result,false),"reverse input reaches guest");
+        Check((result.button&PAD_BUTTON_B)&&!(result.button&(PAD_BUTTON_A|PAD_TRIGGER_R)),
+              "reverse overrides held and queued throttle/drift in every camera");
+        Check(result.analogA==0&&result.triggerR==0&&result.analogB==255,"reverse analog channels match");
+        PublishQuestInput({});
+    }
     if (!failures) std::cout << "Quest input checks passed\n";
     return failures ? 1 : 0;
 }

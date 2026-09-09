@@ -58,6 +58,12 @@ int main() {
           "Meta Touch Pro is supported");
     Check(HasProfile("/interaction_profiles/bytedance/pico4_controller"),
           "PICO 4 is supported");
+    Check(kTouchControllerActions.item[0] == "/user/hand/left/input/y/click",
+          "Quest Y uses the current item");
+    Check(kTouchControllerActions.pause[1] == "/user/hand/left/input/trigger/value",
+          "Quest left trigger brakes and reverses");
+    Check(kTouchControllerActions.trick == "/user/hand/left/input/x/click",
+          "Quest X remains available for tricks");
 
     for (const auto& profile : kOpenXRControllerProfiles) {
         Check(profile.interaction_profile.starts_with("/interaction_profiles/"),

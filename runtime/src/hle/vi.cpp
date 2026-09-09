@@ -549,6 +549,7 @@ void PublishVrSceneAnchor() {
 // producer to the VI retrace boundary, and pre-warms the next frame. Paced from GXCopyDisp; unpaced for
 // the retrace-context black/boot present path in AdvanceRetrace.
 void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
+    mkw::vr::MkwVRFirstPersonRestoreDriver();
     if (s_presentSequenceActive.exchange(true, std::memory_order_acq_rel)) {
         return;
     }

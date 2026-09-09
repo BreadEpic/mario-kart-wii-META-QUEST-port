@@ -9,6 +9,7 @@
 #include "../gx/pipeline.hpp"
 #include "pipeline_cache.hpp"
 #include "stereo_replay.hpp"
+#include "cockpit.hpp"
 #include "tex_copy_conv.hpp"
 #include "tex_palette_conv.hpp"
 #include "texture_replacement.hpp"
@@ -996,6 +997,7 @@ void initialize() {
 }
 
 void shutdown() {
+  cockpit::shutdown();
   shutdown_pipeline_cache();
   gx::clear_shader_module_cache();
   efb_ram::shutdown();
@@ -1775,6 +1777,7 @@ void render_stereo_eye(SealedFrame& frame, wgpu::CommandEncoder& cmd, const Ster
                   .encodeResolves = false,
                   .captureDepth = false,
               });
+  cockpit::render(cmd, stereoFrame, eye);
 }
 
 void render(wgpu::CommandEncoder& cmd, int32_t interpolatedFrame, bool finalize) {

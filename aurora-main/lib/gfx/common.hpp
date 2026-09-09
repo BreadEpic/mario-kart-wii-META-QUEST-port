@@ -311,6 +311,7 @@ struct StereoReplayEye {
 
 struct StereoReplayFrame {
   std::array<StereoReplayEye, AURORA_STEREO_EYE_COUNT> eyes;
+  AuroraCockpit cockpit{};
 };
 
 void end_frame(const wgpu::CommandEncoder& cmd);

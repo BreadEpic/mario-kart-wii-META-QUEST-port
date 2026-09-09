@@ -193,6 +193,11 @@ void OpenXRRuntime::RequestDisplayRefreshRate(float hz) {
 
 bool OpenXRRuntime::CreateInstance() {
     m_enabled_extensions.clear();
+    if (Contains(m_available_extensions, std::string(XR_EXT_HAND_TRACKING_EXTENSION_NAME)) &&
+        Contains(m_available_extensions, std::string(XR_FB_HAND_TRACKING_MESH_EXTENSION_NAME))) {
+        m_enabled_extensions.emplace_back(XR_EXT_HAND_TRACKING_EXTENSION_NAME);
+        m_enabled_extensions.emplace_back(XR_FB_HAND_TRACKING_MESH_EXTENSION_NAME);
+    }
     if (Contains(m_available_extensions, std::string(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME))) {
         m_enabled_extensions.emplace_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
     }
@@ -433,9 +438,21 @@ bool OpenXRRuntime::CreateControllerActions() {
     std::strcpy(action.actionName, "left_grip");
     std::strcpy(action.localizedActionName, "Left hand HUD");
     if (XR_FAILED(xrCreateAction(m_controller_actions, &action, &m_grip_action))) return false;
+    std::strcpy(action.actionName, "right_grip");
+    std::strcpy(action.localizedActionName, "Right hand");
+    if (XR_FAILED(xrCreateAction(m_controller_actions, &action, &m_right_grip_action))) return false;
+    action.actionType = XR_ACTION_TYPE_FLOAT_INPUT;
+    for (size_t hand = 0; hand < 2; ++hand) {
+        std::strcpy(action.actionName, hand ? "wheel_grab_right" : "wheel_grab_left");
+        std::strcpy(action.localizedActionName, hand ? "Grab wheel right" : "Grab wheel left");
+        if (XR_FAILED(xrCreateAction(m_controller_actions, &action, &m_squeeze_actions[hand]))) return false;
+    }
+    std::strcpy(action.actionName, "cockpit_item");
+    std::strcpy(action.localizedActionName, "Cockpit item trigger");
+    if (XR_FAILED(xrCreateAction(m_controller_actions, &action, &m_item_trigger_action))) return false;
     constexpr const char* names[kOpenXRControllerActionCount]{
         "steering", "tricks", "accelerate", "item", "drift", "drift_click",
-        "confirm", "brake", "trick", "look_back", "pause"};
+        "confirm", "brake", "trick", "look_back", "pause", "reverse"};
     for (size_t i = 0; i < kOpenXRControllerActionCount; ++i) {
         XrActionCreateInfo game_action{XR_TYPE_ACTION_CREATE_INFO};
         game_action.actionType = i <= static_cast<size_t>(OpenXRControllerAction::Tricks)
@@ -468,6 +485,13 @@ bool OpenXRRuntime::CreateControllerActions() {
 
         bind_path(m_camera_action, profile.camera_click);
         bind_path(m_grip_action, profile.left_grip_pose);
+        bind_path(m_right_grip_action, "/user/hand/right/input/grip/pose");
+        // Only analog squeeze profiles (Quest/PICO/Index) provide physical wheel input.
+        if (profile.actions.drift == "/user/hand/right/input/squeeze/value") {
+            bind_path(m_squeeze_actions[0], "/user/hand/left/input/squeeze/value");
+            bind_path(m_squeeze_actions[1], "/user/hand/right/input/squeeze/value");
+        }
+        bind_path(m_item_trigger_action, profile.actions.item[0]);
         const std::array<std::array<std::string_view, 2>, kOpenXRControllerActionCount> actions{{
             {profile.actions.steering, {}},
             {profile.actions.tricks, {}},
@@ -479,7 +503,8 @@ bool OpenXRRuntime::CreateControllerActions() {
             {profile.actions.brake, {}},
             {profile.actions.trick, {}},
             {profile.actions.look_back, {}},
-            profile.actions.pause,
+            {profile.actions.pause[0], {}},
+            {profile.actions.pause[1], {}}, // Left trigger: brake, then reverse when held.
         }};
         for (size_t action = 0; action < actions.size(); ++action) {
             for (const auto path : actions[action]) {
@@ -507,6 +532,8 @@ bool OpenXRRuntime::CreateControllerActions() {
     space.action = m_grip_action;
     space.poseInActionSpace.orientation.w = 1.0f;
     if (XR_FAILED(xrCreateActionSpace(m_session, &space, &m_grip_space))) return false;
+    space.action = m_right_grip_action;
+    if (XR_FAILED(xrCreateActionSpace(m_session, &space, &m_right_grip_space))) return false;
     XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
     attach.countActionSets = 1;
     attach.actionSets = &m_controller_actions;
@@ -514,6 +541,13 @@ bool OpenXRRuntime::CreateControllerActions() {
 }
 
 void OpenXRRuntime::DestroyControllerActions() {
+    if (m_right_grip_space != XR_NULL_HANDLE) xrDestroySpace(m_right_grip_space);
+    m_right_grip_space = XR_NULL_HANDLE;
+    m_right_grip_action = m_item_trigger_action = XR_NULL_HANDLE;
+    m_squeeze_actions.fill(XR_NULL_HANDLE);
+    m_squeeze_values = {};
+    m_raw_input = {};
+    m_cockpit_input = m_wheel_held = m_right_grip_valid = false;
     if (m_grip_space != XR_NULL_HANDLE) xrDestroySpace(m_grip_space);
     if (m_controller_actions != XR_NULL_HANDLE) xrDestroyActionSet(m_controller_actions);
     m_grip_space = XR_NULL_HANDLE;
@@ -527,6 +561,9 @@ void OpenXRRuntime::DestroyControllerActions() {
 
 void OpenXRRuntime::PollControllers(XrTime time) {
     m_left_grip_valid = m_camera_clicked = false;
+    m_right_grip_valid = false;
+    m_squeeze_values = {};
+    m_raw_input = {};
     if (m_controller_actions == XR_NULL_HANDLE || !IsSessionFocused()) {
         m_camera_latch.Update(false, false);
         PublishQuestInput({});
@@ -579,13 +616,14 @@ void OpenXRRuntime::PollControllers(XrTime time) {
     const auto trick = boolean_state(OpenXRControllerAction::Trick);
     const auto look_back = boolean_state(OpenXRControllerAction::LookBack);
     const auto pause = boolean_state(OpenXRControllerAction::Pause);
+    const auto reverse = boolean_state(OpenXRControllerAction::Reverse);
     QuestInput input{};
     // Some fallback profiles (for example Khronos Simple Controller) do not
     // expose analog controls. Keep them active for menu navigation while
     // still allowing full driving on profiles with sticks and triggers.
     input.active = steering.isActive || tricks.isActive || accelerate.isActive || item.isActive ||
                    drift.isActive || drift_click.isActive || confirm.isActive || brake.isActive ||
-                   trick.isActive || look_back.isActive || pause.isActive;
+                   trick.isActive || look_back.isActive || pause.isActive || reverse.isActive;
     input.steering_x = steering.currentState.x;
     input.steering_y = steering.currentState.y;
     input.tricks_x = tricks.currentState.x;
@@ -598,18 +636,44 @@ void OpenXRRuntime::PollControllers(XrTime time) {
     input.trick = trick.currentState;
     input.look_back = look_back.currentState;
     input.pause = pause.currentState;
-    PublishQuestInput(input);
-
-    get.action = m_grip_action;
-    XrActionStatePose pose{XR_TYPE_ACTION_STATE_POSE};
-    if (XR_FAILED(xrGetActionStatePose(m_session, &get, &pose)) || !pose.isActive) return;
-    XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
-    constexpr XrSpaceLocationFlags required = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
-    if (XR_SUCCEEDED(xrLocateSpace(m_grip_space, m_app_space, time, &location)) &&
-        (location.locationFlags & required) == required) {
-        m_left_grip_pose = location.pose;
-        m_left_grip_valid = true;
+    input.reverse = reverse.currentState;
+    m_raw_input = input;
+    for (size_t hand = 0; hand < 2; ++hand) {
+        get.action = m_squeeze_actions[hand];
+        XrActionStateFloat squeeze{XR_TYPE_ACTION_STATE_FLOAT};
+        if (XR_SUCCEEDED(xrGetActionStateFloat(m_session, &get, &squeeze)) && squeeze.isActive)
+            m_squeeze_values[hand] = squeeze.currentState;
+        get.action = hand ? m_right_grip_action : m_grip_action;
+        XrActionStatePose pose{XR_TYPE_ACTION_STATE_POSE};
+        if (XR_FAILED(xrGetActionStatePose(m_session, &get, &pose)) || !pose.isActive) continue;
+        XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
+        constexpr XrSpaceLocationFlags required = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+        if (time > 0 && XR_SUCCEEDED(xrLocateSpace(hand ? m_right_grip_space : m_grip_space, m_app_space, time, &location)) &&
+            (location.locationFlags & required) == required) {
+            (hand ? m_right_grip_pose : m_left_grip_pose) = location.pose;
+            (hand ? m_right_grip_valid : m_left_grip_valid) = true;
+        }
     }
+    get.action = m_item_trigger_action;
+    XrActionStateFloat trigger{XR_TYPE_ACTION_STATE_FLOAT};
+    m_item_trigger = XR_SUCCEEDED(xrGetActionStateFloat(m_session, &get, &trigger)) && trigger.isActive
+        ? trigger.currentState : 0;
+    PublishDrivingInput(m_cockpit_input, m_wheel_steering, m_wheel_held);
+}
+
+void OpenXRRuntime::PublishDrivingInput(bool cockpit, float steering, bool held) {
+    m_cockpit_input = cockpit;
+    m_wheel_held = cockpit && held && (m_left_grip_valid || m_right_grip_valid);
+    m_wheel_steering = steering;
+    auto input = m_raw_input;
+    input.cockpit_controls = cockpit;
+    input.wheel_active = m_wheel_held;
+    input.wheel_steering = steering;
+    if (cockpit) {
+        input.item = m_item_trigger;
+        input.drift = 0; // A is mapped to hop/drift by MapQuestInput. Grips only grab.
+    }
+    PublishQuestInput(input);
 }
 
 bool OpenXRRuntime::GetInstanceProcAddress(

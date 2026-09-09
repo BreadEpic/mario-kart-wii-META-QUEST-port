@@ -5,6 +5,7 @@
 #include "vr/openxr_config.h"
 #include "vr/openxr_controller_profiles.h"
 #include "vr/vr_controls.h"
+#include "vr/quest_input.h"
 
 #include <array>
 #include <cstdint>
@@ -174,6 +175,10 @@ public:
     bool ConsumeCameraClick() { const bool click = m_camera_clicked; m_camera_clicked = false; return click; }
     bool LeftGripValid() const { return m_left_grip_valid; }
     const XrPosef& LeftGripPose() const { return m_left_grip_pose; }
+    bool RightGripValid() const { return m_right_grip_valid; }
+    const XrPosef& RightGripPose() const { return m_right_grip_pose; }
+    float HandSqueeze(size_t hand) const { return m_squeeze_values[hand]; }
+    void PublishDrivingInput(bool cockpit, float steering, bool held);
 
     bool IsInitialized() const { return m_instance != XR_NULL_HANDLE; }
     bool HasSession() const { return m_session != XR_NULL_HANDLE; }
@@ -229,6 +234,17 @@ private:
     XrActionSet m_controller_actions = XR_NULL_HANDLE;
     XrAction m_camera_action = XR_NULL_HANDLE;
     XrAction m_grip_action = XR_NULL_HANDLE;
+    XrAction m_right_grip_action = XR_NULL_HANDLE;
+    std::array<XrAction, 2> m_squeeze_actions{};
+    XrAction m_item_trigger_action = XR_NULL_HANDLE;
+    XrSpace m_right_grip_space = XR_NULL_HANDLE;
+    XrPosef m_right_grip_pose{};
+    bool m_right_grip_valid = false;
+    std::array<float, 2> m_squeeze_values{};
+    QuestInput m_raw_input{};
+    float m_item_trigger = 0;
+    bool m_cockpit_input = false, m_wheel_held = false;
+    float m_wheel_steering = 0;
     std::array<XrAction, kOpenXRControllerActionCount> m_game_actions{};
     XrSpace m_grip_space = XR_NULL_HANDLE;
     XrPosef m_left_grip_pose{};

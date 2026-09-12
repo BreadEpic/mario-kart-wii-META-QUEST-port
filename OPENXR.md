@@ -74,8 +74,8 @@ the seated frame. Squeeze either grip near the control to grab it. One or both h
 joining or releasing a hand preserves the steering target, and common two-arm movement is ignored.
 The grab tolerates broad forward/back movement, centre crossings and brief tracking loss. Adaptive
 smoothing damps tracking tremor while keeping fast steering responsive at 72, 90 and 120 Hz.
-Releasing both grips returns steering to the left stick. The optional native steering setting
-animates the vehicle's original control instead of the procedural VR control. Hands use the scene
+Releasing both grips returns steering to the left stick. Native steering is enabled by default and
+animates the vehicle's original control; it can be disabled to use the procedural VR control. Hands use the scene
 depth buffer, so the kart and track correctly occlude them. The renderer uses the Meta hand mesh
 extension when available and articulated glove models as a fallback.
 

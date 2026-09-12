@@ -74,8 +74,9 @@ or both hands can steer; joining or releasing a hand does not change the current
 Two-hand steering follows the angle between the hands, so moving both arms together does not steer.
 The grab tolerates broad gestures and brief tracking loss, while an adaptive filter removes small
 controller tremors without slowing deliberate turns. Releasing both hands returns steering to the
-left stick. The optional native-control setting animates the steering wheel or motorcycle handlebar
-from the vehicle itself. Tracked hands are depth-tested against the kart and world, use the Meta
+left stick. The native-control setting is enabled by default, animates the steering wheel or
+motorcycle handlebar from the vehicle itself, and can be disabled in VR settings. Tracked hands are
+depth-tested against the kart and world, use the Meta
 runtime hand mesh when available, and use articulated glove models otherwise. `F10` also opens the
 VR settings from the desktop mirror.
 
@@ -156,7 +157,7 @@ regions, patched executables) is rejected outright.
 
 ## Installing
 
-Download `WiiCompiled-VR-Portable-v0.6.0.zip` from the
+Download `WiiCompiled-VR-Portable-v0.6.1.zip` from the
 [latest release](https://github.com/heurazy/mario-kart-wii-VR-port/releases/latest). This is the only
 published package and includes the English installer plus the integrated Wheel Wizard launcher.
 Extract the complete archive, run `WiiCompiled-VR-Setup.exe`, choose the ROM, keep portable mode

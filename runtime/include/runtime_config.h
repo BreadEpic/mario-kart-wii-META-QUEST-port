@@ -357,7 +357,7 @@ inline void EnsureConfigFile() {
               "# below replaces world_units_per_meter while it is engaged: 10 is\n"
               "# life-size, where the 500 above makes the race a small diorama.\n"
               "first_person = false\n"
-              "native_steering_wheel = false\n"
+              "native_steering_wheel = true\n"
               "first_person_units_per_meter = 100.0\n"
               "# Where the head sits in the kart's own frame, in metres.\n"
               "first_person_head_up_meters = 1.1\n"
@@ -835,7 +835,7 @@ inline bool SetVrNativeSteeringWheel(bool value) {
 }
 
 inline bool VrNativeSteeringWheel() {
-    return Get().vrNativeSteeringWheel.value_or(false);
+    return Get().vrNativeSteeringWheel.value_or(true);
 }
 
 inline bool SetVrFirstPersonUnitsPerMeter(float value) {

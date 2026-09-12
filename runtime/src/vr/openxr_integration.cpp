@@ -808,8 +808,32 @@ private:
                 << (loaded ? "Meta runtime mesh" : "controller glove fallback (Meta mesh unavailable)") << std::endl;
         }
         auto& cockpit = destination.cockpit;
+        cockpit.unitsPerMeter=units_per_meter;
+        const auto driverAnchor = MkwVRFirstPersonGetAnchor();
         cockpit.active = position_valid && base_position_valid_ && runtime_->IsSessionFocused() &&
-            MkwVRGetCameraMode() == CameraMode::FirstPerson && MkwVRFirstPersonGetAnchor().valid;
+            MkwVRGetCameraMode() == CameraMode::FirstPerson && driverAnchor.valid;
+        cockpit.nativeWheel = cockpit.active && RuntimeConfigFile::VrNativeSteeringWheel() && driverAnchor.native_wheel.valid;
+        cockpit.bike=driverAnchor.bike;
+        WheelGeometry drivingGeometry=driverAnchor.native_wheel;
+        if(cockpit.bike && !drivingGeometry.valid) {
+            drivingGeometry.center={0,SteeringWheel::Height,SteeringWheel::Depth};
+            drivingGeometry.right={1,0,0}; drivingGeometry.up={0,0,-1}; drivingGeometry.normal={0,1,0};
+            drivingGeometry.radius=0.25f; drivingGeometry.valid=true;
+        }
+        if(cockpit.bike) {
+            cockpit.handlebarRadius=drivingGeometry.radius;
+            for(int row=0;row<3;++row) {
+                cockpit.seatFromHandlebar[row*4]=drivingGeometry.right[row];
+                cockpit.seatFromHandlebar[row*4+1]=drivingGeometry.up[row];
+                cockpit.seatFromHandlebar[row*4+2]=drivingGeometry.normal[row];
+                cockpit.seatFromHandlebar[row*4+3]=drivingGeometry.center[row];
+            }
+        }
+        if (cockpit.nativeWheel != last_native_wheel_ || cockpit.bike!=last_bike_) {
+            wheel_ = {};
+            last_native_wheel_ = cockpit.nativeWheel;
+            last_bike_=cockpit.bike;
+        }
         std::array<WheelHand, 2> hands{};
         for (size_t hand = 0; hand < 2; ++hand) {
             auto& target = cockpit.hands[hand];
@@ -832,7 +856,10 @@ private:
         const auto time = source.xr_frame.predicted_display_time;
         const float dt = last_wheel_time_ > 0 ? float(time - last_wheel_time_) * 1.0e-9f : 1.0f / 90.0f;
         last_wheel_time_ = time;
-        const auto wheel = wheel_.Update(hands, cockpit.active, dt);
+        if (cockpit.nativeWheel || cockpit.bike)
+            for (auto& hand : hands) hand = drivingGeometry.ToWheel(hand);
+        const auto wheel = wheel_.Update(hands, cockpit.active, dt,
+            cockpit.nativeWheel || cockpit.bike ? drivingGeometry.radius : SteeringWheel::Radius,cockpit.bike);
         cockpit.wheelAngle = wheel.angle;
         for (int hand = 0; hand < 2; ++hand) cockpit.hands[hand].held = wheel.held[hand];
         runtime_->PublishDrivingInput(cockpit.active, wheel.steering, wheel.held[0] || wheel.held[1]);
@@ -927,6 +954,8 @@ private:
     Pose base_pose_{};
     SteeringWheel wheel_;
     XrTime last_wheel_time_ = 0;
+    bool last_native_wheel_ = false;
+    bool last_bike_ = false;
     bool hand_meshes_loaded_ = false;
     bool base_pose_valid_ = false;
     bool base_position_valid_ = false;

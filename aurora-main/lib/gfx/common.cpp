@@ -159,6 +159,7 @@ uint32_t g_mergedDrawCallCount = 0;
 
 using CommandList = std::vector<Command>;
 struct RenderPass {
+  cockpit::SceneDepth cockpitDepth{};
   wgpu::TextureView colorView;
   wgpu::TextureView resolveView; // MSAA resolve target; null if msaaSamples == 1
   wgpu::TextureView depthView;
@@ -1356,6 +1357,15 @@ static bool prepare_stereo_replay_uniforms(const StereoReplayFrame& stereoFrame)
       Mat4x4<float> gameProjection;
       std::memcpy(&gameProjection, g_uniforms.data() + draw.uniformRange.offset + layout.projectionOffset,
                   sizeof(gameProjection));
+      // Preserve the world's actual reversed-Z mapping for the tracked hands.
+      // Model positions and headset translation use game units; hands use metres.
+      if(layout.perspective && !layout.nativeEfbEffect && gameProjection.m2[3]!=0 &&
+         drawViewport.width>=displayRegion.width*0.9f && drawViewport.height>=displayRegion.height*0.9f) {
+        const auto row=stereo_replay::backend_ndc_depth_row(gameProjection,gx::UseReversedZ);
+        const float low=std::clamp(std::min(drawViewport.znear,drawViewport.zfar),0.f,1.f);
+        const float high=std::clamp(std::max(drawViewport.znear,drawViewport.zfar),0.f,1.f);
+        pass.cockpitDepth={row[2]*(high-low)-low,row[3]*(high-low),true};
+      }
       // Only a genuinely affine projection carries its NDC position in its clip
       // position, which is what the virtual screen reprojection consumes. GX
       // tracks the projection type separately from the matrix, so a 2D draw
@@ -1764,6 +1774,11 @@ void render_stereo_eye(SealedFrame& frame, wgpu::CommandEncoder& cmd, const Ster
   // The eye is a fresh per-frame attachment, not the reused EFB, so replaying
   // past that copy blanks the very image the game presented.
   const int32_t lastPass = get_stereo_stop_at_display_copy() ? displaySource.lastDisplayCopyPass : -1;
+  cockpit::SceneDepth cockpitDepth{};
+  for(size_t i=0;i<frame.data().passes.size();++i) {
+    if(lastPass>=0 && i>static_cast<size_t>(lastPass)) break;
+    if(frame.data().passes[i].cockpitDepth.valid) cockpitDepth=frame.data().passes[i].cockpitDepth;
+  }
   render_impl(frame.data().passes, cmd,
               RenderInvocation{
                   .stereoEye = eye,
@@ -1777,7 +1792,7 @@ void render_stereo_eye(SealedFrame& frame, wgpu::CommandEncoder& cmd, const Ster
                   .encodeResolves = false,
                   .captureDepth = false,
               });
-  cockpit::render(cmd, stereoFrame, eye);
+  cockpit::render(cmd, stereoFrame, eye, cockpitDepth);
 }
 
 void render(wgpu::CommandEncoder& cmd, int32_t interpolatedFrame, bool finalize) {

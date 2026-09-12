@@ -663,7 +663,7 @@ void OpenXRRuntime::PollControllers(XrTime time) {
 
 void OpenXRRuntime::PublishDrivingInput(bool cockpit, float steering, bool held) {
     m_cockpit_input = cockpit;
-    m_wheel_held = cockpit && held && (m_left_grip_valid || m_right_grip_valid);
+    m_wheel_held = cockpit && held; // SteeringWheel owns the bounded tracking-loss grace period.
     m_wheel_steering = steering;
     auto input = m_raw_input;
     input.cockpit_controls = cockpit;

@@ -6,6 +6,7 @@
 
 #include "vr/mkw_vr_first_person.h"
 #include "vr/cockpit_stabilizer.h"
+#include "vr/native_wheel_mesh.h"
 
 #include <cmath>
 #include <initializer_list>
@@ -254,6 +255,131 @@ int main() {
     TestAnchorRotationStaysOrthonormal();
     TestNonFiniteInputIsRejected();
     TestDegenerateKartPoseIsRejected();
+    // Character eye vertices use face-local axes (+X forward, -Y up), not
+    // the kart axes. Baby Mario and Bowser need different eye/neck offsets.
+    Mtx34 faceSmall{0,0,1,0, 0,-1,0,48.31057f, 1,0,0,-0.61309f};
+    Mtx34 faceLarge{0,0,1,0, 0,-1,0,139.83763f, 1,0,0,42.46158f};
+    auto placement=kIdentityMtx34;
+    std::array<float,3> smallEye{},largeEye{};
+    Check(ComputeDriverEyeFromBounds(faceSmall,placement,{5.1962f,-31.3396f,-16.6544f},
+        {20.2551f,5.7841f,16.5134f},smallEye),"small character eye geometry accepted");
+    Check(ComputeDriverEyeFromBounds(faceLarge,placement,{33.5831f,-29.8363f,-22.3588f},
+        {48.5397f,-17.5208f,22.3588f},largeEye),"large character eye geometry accepted");
+    CheckNear(smallEye[1],61.08832f,"baby eye height follows face geometry");
+    CheckNear(largeEye[1],163.51618f,"large character eye height follows face geometry");
+    CheckNear(largeEye[2],83.52298f,"long face moves eyes forward instead of using Mario's offset");
+    placement[7]=-30; placement[11]=-49;
+    Check(ComputeDriverEyeFromBounds(faceLarge,placement,{33.5831f,-29.8363f,-22.3588f},
+        {48.5397f,-17.5208f,22.3588f},largeEye),"vehicle-specific driver placement accepted");
+    CheckNear(largeEye[1],133.51618f,"vehicle seat translation is applied once");
+    auto bikeWorld=kIdentityMtx34;
+    bikeWorld[3]=1000; bikeWorld[7]=300; bikeWorld[11]=-2000;
+    auto ridingFace=bikeWorld;
+    ridingFace[7]+=85; ridingFace[11]+=12;
+    std::array<float,3> ridingEye{};
+    Check(ComputeSeatedEye(ridingFace,bikeWorld,{0,8,4},ridingEye),"evaluated bike posture is measurable");
+    CheckNear(ridingEye[1],93,"bike posture replaces low bind-pose height");
+    CheckNear(ridingEye[2],16,"body transform removed without repeating seat translation");
+    SeatedEyeReference ridingReference;
+    for(int i=0;i<8;++i) ridingReference.Observe(ridingEye,true,false);
+    Check(ridingReference.valid,"normal camera pre-calibrates the riding posture");
+    ridingReference.Observe({0,20,0},false,true);
+    CheckNear(ridingReference.value[1],93,"damage cannot change calibrated height");
+    for(int i=0;i<30;++i) ridingReference.Observe({0,120,40},true,true);
+    CheckNear(ridingReference.value[1],93,"cockpit stays stable during character animations");
+    ridingReference={};
+    Check(!ridingReference.valid,"new race clears previous character posture");
+    Check(!ComputeDriverEyeFromBounds(faceSmall,placement,{1,0,0},{0,1,1},smallEye),
+        "invalid eye bounds fall back without poisoning the camera");
+    const auto nativeWheel=ComputeNativeWheelGeometry(driver,{-24,80,75},{24,80,75},100);
+    Check(nativeWheel.valid,"authored hand targets produce a native wheel");
+    CheckNear(nativeWheel.radius,0.24f,"native radius follows vehicle hand spacing");
+    CheckNear(nativeWheel.center[1],-0.30f,"native wheel follows measured driver eye height");
+    CheckNear(nativeWheel.center[2],-0.40f,"native wheel is in front of the seat");
+    const auto grip=detail::TransformPoint(driver,24,80,75);
+    const auto mapped=nativeWheel.ToWheel({grip.x/100,grip.y/100,grip.z/100,1,true});
+    CheckNear(mapped.x,-0.24f,"kart positive X maps to the driver's left grip");
+    CheckNear(mapped.y,SteeringWheel::Height,"native grip vertical origin");
+    CheckNear(mapped.z,SteeringWheel::Depth,"native grip depth origin");
+    const Mtx34 bikeBasis{-1,0,0,0, 0,1,0,0, 0,0,-1,0};
+    auto handlePose=bikeBasis; handlePose[7]=-40;handlePose[11]=-60;
+    const auto bars=ComputeNativeHandlebarGeometry(handlePose,bikeBasis,{-25,0,0},{25,0,0},100);
+    Check(bars.valid,"bike handle geometry available");
+    CheckNear(bars.center[1],-0.4f,"bike grab height comes from handle part");
+    CheckNear(bars.center[2],-0.6f,"bike grab depth comes from handle part rather than chassis");
+    CheckNear(bars.radius,0.25f,"handle width follows the selected bike");
+    CheckNear(bars.up[2],-1,"bike steering plane points forward");
+    // The handle may already be animated by the game; its rotation must not
+    // rotate the reference frame used to interpret the next hand gesture.
+    handlePose[0]=-0.7071f;handlePose[2]=-0.7071f;handlePose[8]=0.7071f;handlePose[10]=-0.7071f;
+    const auto turnedBars=ComputeNativeHandlebarGeometry(handlePose,bikeBasis,{-25,0,0},{25,0,0},100);
+    CheckNear(turnedBars.right[0],1,"animated handle yaw cannot feed back into VR steering");
+    auto banked=kIdentityMtx34;
+    banked[0]=0.70710678f;banked[1]=-0.70710678f;
+    banked[4]=0.70710678f;banked[5]=0.70710678f;
+    banked[3]=100;banked[7]=20;
+    auto localBar=kIdentityMtx34;localBar[7]=30;localBar[11]=40;
+    const auto movingBar=ComposeMtx(banked,localBar);
+    Mtx34 inverseBank{},inverseMoving{};
+    Check(InvertMtx(banked,inverseBank)&&InvertMtx(movingBar,inverseMoving),"bike transforms invert");
+    const auto levelBar=ComposeMtx(ComposeMtx(kIdentityMtx34,inverseBank),movingBar);
+    CheckNear(levelBar[7],30,"banking cannot move handlebar height");
+    CheckNear(levelBar[3],0,"banking cannot move handlebars sideways");
+    const auto renderCorrection=ComposeMtx(inverseMoving,levelBar);
+    const auto renderedBar=ComposeMtx(movingBar,renderCorrection);
+    CheckNear(renderedBar[7],levelBar[7],"native model and grab volume share the stabilized handle pose");
+    CheckNear(EyeBehindControls(80,40,100,20),-6,"seat moves behind controls with usable clearance");
+    CheckNear(EyeBehindControls(-50,40,100,20),-50,"already comfortable seat stays in place");
+    {
+        SeatedEyeReference reference;
+        for(int i=0;i<10;++i) reference.Observe({0,140,20},NeutralPlayerScale({1,1,1}),true);
+        for(int i=0;i<30;++i) reference.Observe({0,56,8},NeutralPlayerScale({.4f,.4f,.4f}),true);
+        CheckNear(reference.value[1],140,"lightning in chase camera never replaces neutral seat");
+        reference.Observe({0,140,20},true,true);
+        CheckNear(reference.value[1],140,"camera switches and recovery preserve neutral seat");
+        auto body=kIdentityMtx34; body[7]=-100; body[11]=-50;
+        auto normal=ComputeNativeWheelGeometry(body,{-18,70,8},{18,70,8},100);
+        body[7]*=.4f;body[11]*=.4f;
+        auto small=ComputeNativeWheelGeometry(ScaleModelBasis(body,{.4f,.4f,.4f}),{-18,70,8},{18,70,8},40);
+        Check(normal.valid && small.valid,"lightning keeps native steering targets valid");
+        for(int i=0;i<3;++i) CheckNear(small.center[i],normal.center[i],"scaled wheel remains at the same hand position");
+        CheckNear(small.radius,normal.radius,"scaled wheel remains grabbable at the same radius");
+    }
+    CheckNear(CharacterCockpitScale(80),1,"normal and small drivers preserve baseline world scale");
+    const float giantScale=CharacterCockpitScale(200);
+    CheckNear(200/(100*giantScale),1,"large driver cockpit height is normalized in metres");
+    const float lightning=ValidPlayerScale(0.3f);
+    CheckNear(200*lightning,60,"lightning lowers the world-space eye position");
+    CheckNear(100*giantScale*lightning,60,"lightning scales headset translation and stereo world scale together");
+    CheckNear(ValidPlayerScale(0),1,"uninitialized player scale is ignored");
+    SteeringWheel nativeInput;
+    std::array<WheelHand,2> nativeHands{};
+    // Right hand clockwise from the headset's viewpoint, independently of
+    // the authored kart X axis. This catches the original mirrored input.
+    for(int step=0;step<=90;++step) {
+        const float angle=-step*3.14159265f/180;
+        WheelHand hand{nativeWheel.center[0]+0.24f*std::cos(angle),
+            nativeWheel.center[1]+0.24f*std::sin(angle),nativeWheel.center[2],1,true};
+        nativeHands[1]=nativeWheel.ToWheel(hand);
+        nativeInput.Update(nativeHands,true,1.0f/90,0.24f);
+    }
+    Check(nativeInput.Update(nativeHands,true,1.0f/90,0.24f).steering>0.9f,
+        "physical clockwise motion steers right in native mode");
+    std::vector<detail::Vec3> mesh;
+    for(int i=0;i<32;++i) {
+        const float a=i*6.2831853f/32;
+        mesh.push_back({13*std::cos(a),30+13*std::sin(a),-8});
+    }
+    mesh.push_back({0,30,40}); // dashboard, outside wheel plane
+    const auto original=mesh;
+    Check(RotateNativeWheelVertices(mesh,{0,30,-8},13,1.570796327f)==32,
+          "only steering wheel disc vertices rotate");
+    CheckNear(mesh[0].x,0,"native wheel quarter turn X");
+    CheckNear(mesh[0].y,43,"native wheel quarter turn Y");
+    CheckNear(mesh.back().z,40,"dashboard is not deformed");
+    CheckNear(original[0].x,13,"original mesh retained for other vehicles");
+    Check(!ComputeNativeWheelGeometry(driver,{0,0,0},{0,0,0},100).valid,"missing hand span falls back");
+    Check(!ComputeNativeWheelGeometry(driver,{-24,80,75},{24,80,75},0).valid,"invalid world scale falls back");
     if (g_failures != 0) {
         std::cerr << g_failures << " check(s) failed\n";
         return 1;

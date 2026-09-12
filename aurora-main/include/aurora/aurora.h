@@ -131,9 +131,20 @@ typedef enum {
   typedef struct {
     bool active;
     float wheelAngle;
+    bool nativeWheel;
+    bool bike;
+    float handlebarRadius;
+    float unitsPerMeter;
+    float seatFromHandlebar[12];
     float eyeFromSeat[AURORA_STEREO_EYE_COUNT][12];
     AuroraCockpitHand hands[2];
   } AuroraCockpit;
+
+  // Guest draw thread only. Replacements are copied and apply solely to the
+  // matching array and model-view matrix; shared opponent models stay intact.
+  void aurora_clear_native_wheel_vertices(void);
+  void aurora_set_native_wheel_vertices(const void* source, const void* replacement,
+                                       uint32_t size, const float* modelView);
 
   typedef struct {
     float position[3];

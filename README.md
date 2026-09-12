@@ -40,7 +40,8 @@ Play at several times the console's resolution.
 Windows builds render through a D3D12 OpenXR runtime without CPU readback. Every race starts with
 the original game camera; click the right stick to cycle through the original view, a true
 driver-head cockpit view, and a distant diorama view. Cockpit mode hides the local driver, anchors
-the race HUD in front of the seat, and adds tracked hands and a physical two-handed steering wheel.
+the race HUD in front of the seat, and adds tracked hands and physical vehicle controls. The camera
+uses the driver's evaluated eye position and adapts its scale to small and tall characters.
 Outside the cockpit, the circuit map and item panel can follow the left hand. Camera motion from
 hits and tricks is stabilised for comfort without detaching the view from the kart.
 
@@ -68,11 +69,19 @@ See [`OPENXR.md`](OPENXR.md) for Windows setup, configuration, controls, and cur
 | Menu button | Pause | Pause |
 | X + Y | Open or close VR settings without sending either action to the game | Same |
 
-In cockpit mode, bring either tracked hand near the rim and squeeze to grab it. One or both hands
-can steer through a quarter-turn in either direction. Moving a held hand through the centre keeps
-the grab active, and releasing both hands returns steering to the left stick. The tracked hands use
-the Meta runtime hand mesh when available and articulated glove models otherwise. `F10` also opens
-the VR settings from the desktop mirror.
+In cockpit mode, bring either tracked hand near the wheel or handlebar and squeeze to grab it. One
+or both hands can steer; joining or releasing a hand does not change the current steering target.
+Two-hand steering follows the angle between the hands, so moving both arms together does not steer.
+The grab tolerates broad gestures and brief tracking loss, while an adaptive filter removes small
+controller tremors without slowing deliberate turns. Releasing both hands returns steering to the
+left stick. The optional native-control setting animates the steering wheel or motorcycle handlebar
+from the vehicle itself. Tracked hands are depth-tested against the kart and world, use the Meta
+runtime hand mesh when available, and use articulated glove models otherwise. `F10` also opens the
+VR settings from the desktop mirror.
+
+Lightning and other player-scale changes resize the first-person viewpoint and physical controls
+together. Changing camera while shrunk cannot overwrite the neutral seating calibration, and normal
+scale is restored with the game effect.
 
 **Music ducking.** 
 Start playing something else, Spotify, a YouTube video, and
@@ -147,7 +156,7 @@ regions, patched executables) is rejected outright.
 
 ## Installing
 
-Download `WiiCompiled-VR-Portable-v0.5.0.zip` from the
+Download `WiiCompiled-VR-Portable-v0.6.0.zip` from the
 [latest release](https://github.com/heurazy/mario-kart-wii-VR-port/releases/latest). This is the only
 published package and includes the English installer plus the integrated Wheel Wizard launcher.
 Extract the complete archive, run `WiiCompiled-VR-Setup.exe`, choose the ROM, keep portable mode

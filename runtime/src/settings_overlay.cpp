@@ -858,8 +858,17 @@ void DrawVrSettings() {
                 if (ImGui::Combo("View", &mode, modes, 3))
                     mkw::vr::MkwVRSetCameraMode(static_cast<mkw::vr::CameraMode>(mode));
                 ImGui::TextDisabled("Press the right stick to switch views.");
+                bool nativeWheel = RuntimeConfigFile::VrNativeSteeringWheel();
+                if (ImGui::Checkbox("Use the vehicle's original steering wheel", &nativeWheel))
+                    RuntimeConfigFile::SetVrNativeSteeringWheel(nativeWheel);
+                ImGui::TextWrapped("First person: grab at the vehicle's original wheel or handlebars. Adds steering rotation to static kart wheel geometry. Turn off to use the VR wheel. Falls back to the VR wheel if vehicle grip positions are unavailable.");
+                ImGui::TextWrapped("Motorbikes use handlebars with grip zones fitted to the bike. Turn horizontally: pull your right hand back to turn right, or your left hand back to turn left. 45 degrees gives full steering. With the original model disabled, a VR handlebar replaces the circular wheel.");
+                ImGui::TextWrapped("Once grabbed, controls stay attached until you release the grip. Larger grab zones help with wide handlebars. Bike handlebars stay level during banking. The seat automatically stays behind the controls.");
+                ImGui::TextWrapped("Large characters use an automatic cockpit world scale. Lightning also shrinks your VR viewpoint and makes the track appear larger. Small kart wheels have an enlarged grab area, including the centre.");
                 ImGui::TextWrapped("Races start in the original camera. Hold the left trigger to brake and reverse in any camera. Press Y to use an item. The menu button still pauses the game.");
                 if (mode == 1) {
+                    if (nativeWheel && !mkw::vr::MkwVRFirstPersonGetAnchor().native_wheel.valid)
+                        ImGui::TextWrapped("Original grip positions unavailable: using the VR wheel for now.");
                     bool changed = false;
                     float eyeUp = g_vrFirstPersonHeadUp - 1.1f;
                     float eyeForward = g_vrFirstPersonHeadForward - 1.2f;
@@ -878,8 +887,8 @@ void DrawVrSettings() {
                         RuntimeConfigFile::SetVrFirstPersonHeadRightMeters(g_vrFirstPersonHeadRight);
                         mkw::vr::MkwVRFirstPersonApplyConfiguredSettings();
                     }
-                    ImGui::TextWrapped("The view follows the driver's seat and hides the local driver. Recenter while sitting upright and looking straight ahead.");
-                    ImGui::TextWrapped("Hold either grip near the wheel rim to steer with your hands. Release both grips to use the left stick. Right trigger: accelerate. Left trigger: brake / reverse. Y: item. X: trick. A: hop / drift. B: brake. Gripped hands can move 80 cm forward or back from the wheel plane.");
+                    ImGui::TextWrapped("Eye position is calibrated from the character's seated riding posture, including bikes. The reference stays fixed in first person during animations. These sliders are additional adjustments. Recenter while sitting upright and looking straight ahead.");
+                    ImGui::TextWrapped("Hold either grip near the wheel rim or handlebar ends to steer with your hands. Release both grips to use the left stick. Right trigger: accelerate. Left trigger: brake / reverse. Y: item. X: trick. A: hop / drift. B: brake.");
                 }
                 if (mode == 2) {
                     float distance = RuntimeConfigFile::VrDioramaDistance() / 100;

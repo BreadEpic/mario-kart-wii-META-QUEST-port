@@ -10,6 +10,22 @@
 
 #include "../../gfx/common.hpp"
 #include "../../gx/fifo.hpp"
+#include "../../gx/native_wheel.hpp"
+
+extern "C" void aurora_clear_native_wheel_vertices() {
+  if(!aurora::gx::nativeWheelArrays.empty()) aurora::gx::fifo::drain();
+  aurora::gx::nativeWheelArrays.clear();
+}
+extern "C" void aurora_set_native_wheel_vertices(const void* source,const void* replacement,
+    uint32_t size,const float* modelView) {
+  if(!source || !replacement || !modelView || !size || size>65536) return;
+  aurora::gx::NativeWheelArray array;
+  array.source=source;
+  const auto* bytes=static_cast<const uint8_t*>(replacement);
+  array.bytes.assign(bytes,bytes+size);
+  std::memcpy(array.modelView.data(),modelView,48);
+  aurora::gx::nativeWheelArrays.push_back(std::move(array));
+}
 
 // Single definition for the `Log` that gx.hpp declares for this directory.
 aurora::Module Log("aurora::gx");

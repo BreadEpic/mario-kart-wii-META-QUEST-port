@@ -61,6 +61,7 @@ struct RuntimeUserConfig {
     std::optional<bool> vrStopAtDisplayCopy;
     std::optional<bool> vrSkipCopyClears;
     std::optional<bool> vrFirstPerson;
+    std::optional<bool> vrNativeSteeringWheel;
     std::optional<float> vrFirstPersonUnitsPerMeter;
     std::optional<float> vrFirstPersonHeadUpMeters;
     std::optional<float> vrFirstPersonHeadForwardMeters;
@@ -356,6 +357,7 @@ inline void EnsureConfigFile() {
               "# below replaces world_units_per_meter while it is engaged: 10 is\n"
               "# life-size, where the 500 above makes the race a small diorama.\n"
               "first_person = false\n"
+              "native_steering_wheel = false\n"
               "first_person_units_per_meter = 100.0\n"
               "# Where the head sits in the kart's own frame, in metres.\n"
               "first_person_head_up_meters = 1.1\n"
@@ -530,6 +532,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.vrStopAtDisplayCopy = FindConfigValue<bool>(document, "vr", "stop_at_display_copy");
     config.vrSkipCopyClears = FindConfigValue<bool>(document, "vr", "skip_copy_clears");
     config.vrFirstPerson = FindConfigValue<bool>(document, "vr", "first_person");
+    config.vrNativeSteeringWheel = FindConfigValue<bool>(document, "vr", "native_steering_wheel");
     if (auto value = FindConfigFloat(document, "vr", "first_person_units_per_meter");
         value && *value >= 1.0f && *value <= 10000.0f) {
         config.vrFirstPersonUnitsPerMeter = *value;
@@ -824,6 +827,15 @@ inline bool SetVrSkipCopyClears(bool value) {
 inline bool SetVrFirstPerson(bool value) {
     Mutable().vrFirstPerson = value;
     return WriteSetting("vr", "first_person", value ? "true" : "false");
+}
+
+inline bool SetVrNativeSteeringWheel(bool value) {
+    Mutable().vrNativeSteeringWheel = value;
+    return WriteSetting("vr", "native_steering_wheel", value ? "true" : "false");
+}
+
+inline bool VrNativeSteeringWheel() {
+    return Get().vrNativeSteeringWheel.value_or(false);
 }
 
 inline bool SetVrFirstPersonUnitsPerMeter(float value) {

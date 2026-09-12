@@ -5,6 +5,7 @@
 #include "../gfx/texture_replacement.hpp"
 #include "dolphin/gx/GXAurora.h"
 #include "gx.hpp"
+#include "native_wheel.hpp"
 #include "gx_fmt.hpp"
 #include "pipeline.hpp"
 #include "shader_info.hpp"
@@ -2252,7 +2253,16 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
       continue;
     }
     auto& array = g_gxState.arrays[i];
-    if (array.cachedRange.size > 0) {
+    auto* nativeWheel = i==GX_VA_POS ? native_wheel_array(array) : nullptr;
+    if (nativeWheel) {
+      static unsigned nativeWheelDrawLogs=0;
+      if(nativeWheelDrawLogs++<4) Log.info("Native steering wheel: animated local vehicle vertex array");
+      // Never populate the shared source's cache with the animated copy.
+      // Later draws of the same asset must still see the original vertices.
+      if(nativeWheel->uploaded.size==0)
+        nativeWheel->uploaded=gfx::push_storage(nativeWheel->bytes.data(),nativeWheel->bytes.size());
+      ranges.vaRanges[i-GX_VA_POS]=nativeWheel->uploaded;
+    } else if (array.cachedRange.size > 0) {
       ranges.vaRanges[i - GX_VA_POS] = array.cachedRange;
     } else {
       const auto range = gfx::push_storage(static_cast<const uint8_t*>(array.data), array.size);

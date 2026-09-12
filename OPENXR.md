@@ -69,11 +69,20 @@ back for comfort. The diorama uses a much larger world scale and follows the kar
 driving direction. The game's own transforms are not modified; Aurora composes the VR view and eye
 transforms around them.
 
-Cockpit mode draws a 36 cm steering wheel and tracked controller hands in the seated frame. Squeeze
-either grip near the rim to grab it; one or both hands can steer, and a quarter-turn reaches full
-lock. The grab tolerates broad forward/back movement and stays active when a hand crosses the wheel
-centre. Releasing both grips returns steering to the left stick. The renderer uses the Meta hand
-mesh extension when available and articulated glove models as a fallback.
+Cockpit mode presents the vehicle's wheel or motorcycle handlebar and tracked controller hands in
+the seated frame. Squeeze either grip near the control to grab it. One or both hands can steer;
+joining or releasing a hand preserves the steering target, and common two-arm movement is ignored.
+The grab tolerates broad forward/back movement, centre crossings and brief tracking loss. Adaptive
+smoothing damps tracking tremor while keeping fast steering responsive at 72, 90 and 120 Hz.
+Releasing both grips returns steering to the left stick. The optional native steering setting
+animates the vehicle's original control instead of the procedural VR control. Hands use the scene
+depth buffer, so the kart and track correctly occlude them. The renderer uses the Meta hand mesh
+extension when available and articulated glove models as a fallback.
+
+The seated calibration uses the evaluated eye position for each driver and vehicle. Tall characters
+receive a comfortable world scale, while lightning and other temporary player scaling resize the
+viewpoint, control position and grab radius together. Temporary scale cannot replace the neutral
+calibration when the camera is changed.
 
 ## Controller compatibility
 

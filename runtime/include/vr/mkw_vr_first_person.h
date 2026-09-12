@@ -3,6 +3,7 @@
 #pragma once
 
 #include "vr/vr_controls.h"
+#include "vr/steering_wheel.h"
 
 #include <array>
 #include <cmath>
@@ -41,6 +42,8 @@ struct FirstPersonAnchor {
     bool valid = false;
     uint64_t guest_frame_index = 0;
     float units_per_meter = 0.0f;
+    WheelGeometry native_wheel{};
+    bool bike=false;
 };
 
 // ---------------------------------------------------------------------------
@@ -105,6 +108,145 @@ inline Vec3 TransformPoint(const Mtx34& matrix, float x, float y, float z) noexc
 }
 
 } // namespace detail
+
+inline Mtx34 ComposeMtx(const Mtx34& a,const Mtx34& b) noexcept {
+    Mtx34 out{};
+    for(int row=0;row<3;++row) for(int col=0;col<4;++col) {
+        out[row*4+col]=col==3?a[row*4+3]:0;
+        for(int k=0;k<3;++k) out[row*4+col]+=a[row*4+k]*b[k*4+col];
+    }
+    return out;
+}
+inline bool InvertMtx(const Mtx34& m,Mtx34& out) noexcept {
+    if(!detail::IsFiniteMtx34(m)) return false;
+    const detail::Vec3 a{m[0],m[4],m[8]},b{m[1],m[5],m[9]},c{m[2],m[6],m[10]};
+    const auto x=detail::Cross(b,c),y=detail::Cross(c,a),z=detail::Cross(a,b);
+    const float det=detail::Dot(a,x);
+    if(!detail::IsFiniteFloat(&det) || std::abs(det)<1e-6f) return false;
+    out={x.x/det,x.y/det,x.z/det,0,y.x/det,y.y/det,y.z/det,0,z.x/det,z.y/det,z.z/det,0};
+    for(int row=0;row<3;++row) out[row*4+3]=-(out[row*4]*m[3]+out[row*4+1]*m[7]+out[row*4+2]*m[11]);
+    return detail::IsFiniteMtx34(out);
+}
+inline float EyeBehindControls(float eyeForward,float controlsForward,float units,float radius) noexcept {
+    const float clearance=std::clamp(0.40f+radius/units*0.3f,0.45f,0.65f)*units;
+    return std::min(eyeForward,controlsForward-clearance);
+}
+
+inline float CharacterCockpitScale(float eyeHeight) noexcept {
+    if(!detail::IsFiniteFloat(&eyeHeight)) return 1;
+    return std::clamp(eyeHeight/100.0f,1.0f,2.5f);
+}
+inline float ValidPlayerScale(float scale) noexcept {
+    return detail::IsFiniteFloat(&scale) && scale>=0.1f && scale<=4.0f ? scale:1.0f;
+}
+inline Mtx34 ScaleModelBasis(Mtx34 pose,const std::array<float,3>& scale) noexcept {
+    for(int row=0;row<3;++row) for(int col=0;col<3;++col) pose[row*4+col]*=scale[col];
+    return pose;
+}
+inline bool NeutralPlayerScale(const std::array<float,3>& scale) noexcept {
+    for(float value:scale) if(!detail::IsFiniteFloat(&value) || std::abs(value-1)>0.001f) return false;
+    return true;
+}
+
+// Eye position resources are in the face bone's local coordinates, whose axes
+// differ between characters. Transform their centre through the complete bind
+// matrix before applying the vehicle-specific driver placement.
+inline bool ComputeDriverEyeFromBounds(const Mtx34& face, const Mtx34& placement,
+        detail::Vec3 minimum, detail::Vec3 maximum, std::array<float,3>& eye) noexcept {
+    if(!detail::IsFiniteMtx34(face) || !detail::IsFiniteMtx34(placement)) return false;
+    const std::array<float,6> bounds{minimum.x,minimum.y,minimum.z,maximum.x,maximum.y,maximum.z};
+    for(const auto& value:bounds) if(!detail::IsFiniteFloat(&value) || std::abs(value)>500) return false;
+    if(minimum.x>maximum.x || minimum.y>maximum.y || minimum.z>maximum.z) return false;
+    const auto model=detail::TransformPoint(face,(minimum.x+maximum.x)*0.5f,
+        (minimum.y+maximum.y)*0.5f,(minimum.z+maximum.z)*0.5f);
+    const auto seat=detail::TransformPoint(placement,model.x,model.y,model.z);
+    const std::array<float,3> result{seat.x,seat.y,seat.z};
+    for(const auto& value:result) if(!detail::IsFiniteFloat(&value) || std::abs(value)>500) return false;
+    if(seat.y<5) return false;
+    eye=result;
+    return true;
+}
+
+// Remove the visible vehicle's world transform from the evaluated head pose.
+// This retains the riding posture, but never imports kart motion into the seat.
+inline bool ComputeSeatedEye(const Mtx34& faceWorld,const Mtx34& bodyWorld,
+        detail::Vec3 eyeLocal,std::array<float,3>& eye) noexcept {
+    if(!detail::IsFiniteMtx34(faceWorld) || !detail::IsFiniteMtx34(bodyWorld)) return false;
+    const detail::Vec3 a{bodyWorld[0],bodyWorld[4],bodyWorld[8]},
+        b{bodyWorld[1],bodyWorld[5],bodyWorld[9]},c{bodyWorld[2],bodyWorld[6],bodyWorld[10]};
+    const auto bc=detail::Cross(b,c),ca=detail::Cross(c,a),ab=detail::Cross(a,b);
+    const float det=detail::Dot(a,bc);
+    if(!detail::IsFiniteFloat(&det) || std::abs(det)<1e-6f) return false;
+    const auto world=detail::TransformPoint(faceWorld,eyeLocal.x,eyeLocal.y,eyeLocal.z);
+    const detail::Vec3 delta{world.x-bodyWorld[3],world.y-bodyWorld[7],world.z-bodyWorld[11]};
+    const std::array<float,3> result{detail::Dot(bc,delta)/det,detail::Dot(ca,delta)/det,detail::Dot(ab,delta)/det};
+    for(const auto& v:result) if(!detail::IsFiniteFloat(&v) || std::abs(v)>500) return false;
+    if(result[1]<5) return false;
+    eye=result;
+    return true;
+}
+
+struct SeatedEyeReference {
+    std::array<float,3> value{},candidate{};
+    unsigned stable=0;
+    bool valid=false;
+    void Observe(const std::array<float,3>& sample,bool safe,bool freeze) {
+        if(freeze && valid) return;
+        if(!safe) { stable=0; return; }
+        float delta=0;
+        for(int i=0;i<3;++i) delta=std::max(delta,std::abs(sample[i]-candidate[i]));
+        stable=stable && delta<2.0f ? stable+1 : 1;
+        candidate=sample;
+        if(stable>=8) { value=sample;valid=true;stable=8; }
+    }
+};
+
+// Neutral authored hand targets, transformed by the visible kart body. Do not
+// use the animated hand IK targets: feeding their steering rotation back into
+// the controller angle would make the input chase its own animation.
+inline WheelGeometry ComputeNativeWheelGeometry(const Mtx34& seat_from_body,
+        detail::Vec3 left, detail::Vec3 right, float units) noexcept {
+    WheelGeometry out{};
+    if (!detail::IsFiniteMtx34(seat_from_body) || !detail::IsFiniteFloat(&units) || units<=0) return out;
+    if (left.x>right.x) std::swap(left,right);
+    const auto a=detail::TransformPoint(seat_from_body,left.x,left.y,left.z);
+    const auto b=detail::TransformPoint(seat_from_body,right.x,right.y,right.z);
+    detail::Vec3 x{b.x-a.x,b.y-a.y,b.z-a.z};
+    const float radius=std::sqrt(detail::Dot(x,x))/(2*units);
+    if (!detail::IsFiniteFloat(&radius) || radius<0.04f || radius>1.0f || !detail::Normalize(x)) return out;
+    // Kart +X points left when looking along its +Z driving direction.
+    // WheelHand uses headset +X (right), so reverse the authored lateral axis.
+    x={-x.x,-x.y,-x.z};
+    detail::Vec3 y{seat_from_body[1],seat_from_body[5],seat_from_body[9]};
+    const float projection=detail::Dot(x,y);
+    y={y.x-x.x*projection,y.y-x.y*projection,y.z-x.z*projection};
+    if (!detail::Normalize(y)) return out;
+    const auto z=detail::Cross(x,y);
+    out.center={(a.x+b.x)/(2*units),(a.y+b.y)/(2*units),(a.z+b.z)/(2*units)};
+    for(const auto& value:out.center)
+        if (!detail::IsFiniteFloat(&value) || std::abs(value)>5) return {};
+    out.right={x.x,x.y,x.z}; out.up={y.x,y.y,y.z}; out.normal={z.x,z.y,z.z};
+    out.radius=radius; out.valid=true;
+    return out;
+}
+
+inline WheelGeometry ComputeNativeHandlebarGeometry(const Mtx34& seatFromHandle,
+        const Mtx34& seatFromBody, detail::Vec3 left,detail::Vec3 right,float units) noexcept {
+    auto out=ComputeNativeWheelGeometry(seatFromHandle,left,right,units);
+    if(!out.valid || !detail::IsFiniteMtx34(seatFromBody)) return {};
+    // Use the body's neutral axes, not the already-steered handle's axes.
+    // Otherwise the visual steering feeds back into the next input sample.
+    detail::Vec3 x{-seatFromBody[0],-seatFromBody[4],-seatFromBody[8]},
+        forward{seatFromBody[2],seatFromBody[6],seatFromBody[10]};
+    if(!detail::Normalize(x)) return {};
+    const float along=detail::Dot(forward,x);
+    forward={forward.x-along*x.x,forward.y-along*x.y,forward.z-along*x.z};
+    if(!detail::Normalize(forward)) return {};
+    const auto vertical=detail::Cross(x,forward);
+    out.right={x.x,x.y,x.z}; out.up={forward.x,forward.y,forward.z};
+    out.normal={vertical.x,vertical.y,vertical.z};
+    return out;
+}
 
 // Builds the anchor from the game's view matrix (world -> recorded view space),
 // the kart's pose (kart-local -> world), and head offsets already converted to

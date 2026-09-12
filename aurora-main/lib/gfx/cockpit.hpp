@@ -143,6 +143,17 @@ inline void runtime_hand(std::vector<Vertex>& out, const AuroraCockpitHand& hand
 inline std::vector<Vertex> geometry(const AuroraCockpit& cockpit) {
   std::vector<Vertex> vertices;vertices.reserve(12000);
   // The visible radius and position must match runtime/vr/steering_wheel.h.
+  if (!cockpit.nativeWheel && cockpit.bike) {
+    const float c=std::cos(cockpit.wheelAngle),s=std::sin(cockpit.wheelAngle);
+    const auto barPoint=[&](float x,float y,float z) {
+      return point(cockpit.seatFromHandlebar,{c*x+s*y,-s*x+c*y,z});
+    };
+    const float radius=cockpit.handlebarRadius;
+    tube(vertices,barPoint(-radius,0,0),barPoint(radius,0,0),0.013f,{0.45f,0.48f,0.52f});
+    for(float side:{-1.0f,1.0f})
+      tube(vertices,barPoint(side*std::max(radius-0.10f,0.0f),0,0),barPoint(side*radius,0,0),0.024f,{0.12f,0.18f,0.19f});
+    tube(vertices,barPoint(0,0,-0.13f),barPoint(0,0,0),0.023f,{0.12f,0.65f,0.61f});
+  } else if (!cockpit.nativeWheel) {
   const auto rim=[&](float angle) -> V { return {0.18f*std::cos(angle),-0.30f+0.18f*std::sin(angle),-0.42f}; };
   for(int i=0;i<64;++i) {
     const float angle=float(i)*6.2831853f/64-cockpit.wheelAngle;
@@ -152,6 +163,7 @@ inline std::vector<Vertex> geometry(const AuroraCockpit& cockpit) {
   for(float a : {0.0f,3.14159265f,4.71238898f})
     tube(vertices,{0,-0.30f,-0.42f},rim(a-cockpit.wheelAngle),0.011f,{0.45f,0.48f,0.52f});
   tube(vertices,{0,-0.30f,-0.445f},{0,-0.30f,-0.395f},0.035f,{0.12f,0.65f,0.61f},16);
+  }
   std::array<std::shared_ptr<const HandMesh>,2> current;
   { std::lock_guard lock(meshMutex);current=meshes; }
   for(int side=0;side<2;++side) if(cockpit.hands[side].tracked) {
@@ -161,15 +173,23 @@ inline std::vector<Vertex> geometry(const AuroraCockpit& cockpit) {
   return vertices;
 }
 inline wgpu::RenderPipeline pipeline;
+struct SceneDepth {
+  float z=0, constant=0;
+  bool valid=false;
+};
 inline uint32_t pipelineSamples=0;
+inline bool pipelineReversedDepth=false;
 inline wgpu::TextureFormat pipelineFormat{};
 inline void shutdown() { pipeline=nullptr;pipelineSamples=0; }
-inline void render(wgpu::CommandEncoder& cmd,const StereoReplayFrame& frame,uint32_t eye) {
-  if(!frame.cockpit.active) return;
+inline void render(wgpu::CommandEncoder& cmd,const StereoReplayFrame& frame,uint32_t eye,SceneDepth sceneDepth={}) {
+  if(!frame.cockpit.active || !sceneDepth.valid) return;
   using namespace webgpu;
   const auto& target=frame.eyes[eye].target;
   const auto format=g_graphicsConfig.surfaceConfiguration.format;
-  if(!pipeline||pipelineSamples!=target.msaaSamples||pipelineFormat!=format) {
+  // The guest can reverse its viewport depth independently of Aurora's
+  // global reversed-Z convention. The final 1/d coefficient is authoritative.
+  const bool reversedDepth=sceneDepth.constant>0;
+  if(!pipeline||pipelineSamples!=target.msaaSamples||pipelineFormat!=format||pipelineReversedDepth!=reversedDepth) {
     wgpu::ShaderSourceWGSL source{};
     source.code=R"(
       struct Out { @builtin(position) position: vec4f, @location(0) color: vec3f };
@@ -185,21 +205,27 @@ inline void render(wgpu::CommandEncoder& cmd,const StereoReplayFrame& frame,uint
     const wgpu::VertexBufferLayout layout{.arrayStride=28,.attributeCount=2,.attributes=attrs};
     const wgpu::ColorTargetState color{.format=format};
     const wgpu::FragmentState fragment{.module=shader,.entryPoint="fs",.targetCount=1,.targets=&color};
-    const wgpu::DepthStencilState depth{.format=g_graphicsConfig.depthFormat,.depthWriteEnabled=true,.depthCompare=wgpu::CompareFunction::LessEqual};
+    const wgpu::DepthStencilState depth{.format=g_graphicsConfig.depthFormat,.depthWriteEnabled=true,
+      .depthCompare=reversedDepth?wgpu::CompareFunction::GreaterEqual:wgpu::CompareFunction::LessEqual};
     wgpu::RenderPipelineDescriptor desc{};desc.label="VR cockpit";
     desc.vertex={.module=shader,.entryPoint="vs",.bufferCount=1,.buffers=&layout};
     desc.fragment=&fragment;desc.depthStencil=&depth;desc.multisample.count=target.msaaSamples;
     desc.primitive.topology=wgpu::PrimitiveTopology::TriangleList;
     pipeline=g_device.CreateRenderPipeline(&desc);pipelineSamples=target.msaaSamples;pipelineFormat=format;
+    pipelineReversedDepth=reversedDepth;
   }
   const auto vertices=geometry(frame.cockpit);
+  if(vertices.empty()) return;
   struct ClipVertex { float p[4]; V color; };
   std::vector<ClipVertex> clip(vertices.size());
   const auto& projection=frame.eyes[eye].projection;
   for(size_t i=0;i<clip.size();++i) {
     const auto p=point(frame.cockpit.eyeFromSeat[eye],vertices[i].position);
+    // The original race near plane can sit beyond a close hand. Keep that
+    // hand at the nearest representable depth instead of clipping it away.
+    const float z=sceneDepth.z*p[2]+sceneDepth.constant/std::max(frame.cockpit.unitsPerMeter,0.001f);
     clip[i]={{projection.m0[0]*p[0]+projection.m0[2]*p[2],projection.m1[1]*p[1]+projection.m1[2]*p[2],
-      -p[2]*1.004016f-0.0200803f,-p[2]},vertices[i].color};
+      std::clamp(z,0.0f,std::max(-p[2],0.0f)),-p[2]},vertices[i].color};
   }
   const wgpu::BufferDescriptor bd{.label="VR cockpit vertices",.usage=wgpu::BufferUsage::Vertex,
       .size=clip.size()*sizeof(ClipVertex),.mappedAtCreation=true};
@@ -207,7 +233,7 @@ inline void render(wgpu::CommandEncoder& cmd,const StereoReplayFrame& frame,uint
   std::memcpy(buffer.GetMappedRange(),clip.data(),clip.size()*sizeof(ClipVertex));buffer.Unmap();
   const wgpu::RenderPassColorAttachment attachment{.view=target.colorView,.resolveTarget=target.resolveView,
     .loadOp=wgpu::LoadOp::Load,.storeOp=wgpu::StoreOp::Store};
-  const wgpu::RenderPassDepthStencilAttachment depth{.view=target.depthView,.depthLoadOp=wgpu::LoadOp::Clear,
+  const wgpu::RenderPassDepthStencilAttachment depth{.view=target.depthView,.depthLoadOp=wgpu::LoadOp::Load,
     .depthStoreOp=wgpu::StoreOp::Store,.depthClearValue=1.0f};
   const wgpu::RenderPassDescriptor pd{.label="VR cockpit overlay",.colorAttachmentCount=1,.colorAttachments=&attachment,.depthStencilAttachment=&depth};
   auto pass=cmd.BeginRenderPass(&pd);pass.SetPipeline(pipeline);pass.SetVertexBuffer(0,buffer);pass.Draw(clip.size());pass.End();

@@ -66,6 +66,9 @@ jobs:
           gh release view $env:GITHUB_REF_NAME *> $null
           if ($LASTEXITCODE -ne 0) { gh release create $env:GITHUB_REF_NAME --verify-tag --generate-notes }
           if ($LASTEXITCODE -ne 0) { throw 'Release creation failed.' }
-          $assets = @(Get-ChildItem Launcher/dist/WiiCompiled-VR-Portable-*.zip,Launcher/dist/WiiCompiled-VR-Portable-*.sha256 | ForEach-Object FullName)
+          $assets = @(
+            (Resolve-Path Launcher/dist/WiiCompiled-Setup.exe).Path
+            Get-ChildItem Launcher/dist/WiiCompiled-VR-Portable-*.zip,Launcher/dist/WiiCompiled-VR-Portable-*.sha256 | ForEach-Object FullName
+          )
           gh release upload $env:GITHUB_REF_NAME @assets
           if ($LASTEXITCODE -ne 0) { throw 'Release asset upload failed.' }

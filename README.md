@@ -159,8 +159,7 @@ regions, patched executables) is rejected outright.
 
 Version 1.0 adds configurable physical steering, limited button remapping,
 grab/release haptics, a VR diagnostic panel and optional adaptive resolution. See
-[OPENXR.md](OPENXR.md) for defaults, restart requirements and remaining limitations; these changes
-are not part of the already published v0.6.1 archive.
+[OPENXR.md](OPENXR.md) for defaults, restart requirements and remaining limitations.
 
 New portable builds include `Update-VR.cmd`. It checks the VR project's own release, verifies its
 archive and managed files, preserves personal/game data and retains previous program files for
@@ -172,12 +171,12 @@ server supplies a strong matching ETag. A failed Retro Rewind compilation restor
 pack. This does not make every file written by the game compilation transactionally replaceable;
 keep your previous portable folder when testing a development build.
 
-Download `WiiCompiled-VR-Portable-v0.6.1.zip` from the
-[latest release](https://github.com/heurazy/mario-kart-wii-VR-port/releases/latest). This is the only
-published package and includes the English installer plus the integrated Wheel Wizard launcher.
-Extract the complete archive, run `WiiCompiled-VR-Setup.exe`, choose the ROM, keep portable mode
+Download the [latest release](https://github.com/heurazy/mario-kart-wii-VR-port/releases/latest).
+`WiiCompiled-Setup.exe` is the standalone English launcher/installer. For a complete portable
+bundle, download `WiiCompiled-VR-Portable-v1.0.zip`, extract it, run
+`WiiCompiled-VR-Setup.exe`, choose your own clean PAL RMCP01 disc image, keep portable mode
 enabled, then launch `WheelWizard\WheelWizard.exe`. You can select **Mario Kart Wii VR** or
-**Retro Rewind VR** from the full-width game selector.
+**Retro Rewind VR** from the full-width game selector. No ROM is included in either distribution.
 
 The installer downloads and installs the latest Retro Rewind pack from Wheel Wizard's official
 service by default. Clear that option to select an existing `RetroRewind6` folder or install only

@@ -144,9 +144,9 @@ controls are released after the panel closes.
 The game continues to display GameCube prompts. The Driving tab can swap item/trick between Y/X
 and cockpit drift/brake between A/B. X+Y always opens settings, menu navigation remains A/B, and
 the left trigger always brakes/reverses. Optional short haptic pulses indicate grabbing/releasing.
-These additions belong to the development build after v0.6.1.
+These additions are included in v1.0.
 
-## Development settings after v0.6.1
+## Version 1.0 settings
 
 Under SteamVR, X still triggers tricks immediately. Holding X for 0.65 seconds sends
 one Mario Kart pause press; release X before pausing/resuming again. The initial press

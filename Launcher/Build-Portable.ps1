@@ -17,7 +17,7 @@ Set-StrictMode -Version 3
 $repoRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $setup=[IO.Path]::GetFullPath($SetupExecutable)
 if(-not (Test-Path -LiteralPath $setup -PathType Leaf)) { throw 'Build the ROM-free installer first.' }
-if($Version -notmatch '^\d+\.\d+\.\d+([-.][A-Za-z0-9.-]+)?$') { throw 'Invalid portable version.' }
+if($Version -notmatch '^\d+\.\d+(\.\d+)?([-.][A-Za-z0-9.-]+)?$') { throw 'Invalid portable version.' }
 $revision=(& git -C $repoRoot rev-parse HEAD).Trim()
 if($LASTEXITCODE -ne 0) { throw 'Unable to identify the source revision.' }
 if(-not $AllowDirty -and (& git -C $repoRoot status --porcelain)) { throw 'Release packaging requires a clean source checkout. Use -AllowDirty only for local development.' }

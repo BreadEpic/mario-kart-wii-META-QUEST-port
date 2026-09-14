@@ -9,6 +9,9 @@ void InitializeRuntimeSettings() noexcept;
 // Draw the F10 settings bar before each Aurora present.
 void HandleEvents(const AuroraEvent* events) noexcept;
 void Draw() noexcept;
+bool VrWelcomePending() noexcept;
+void DrawVrWelcome() noexcept;
+void DrawVrIntroPreview(int kind) noexcept;
 bool StartupScreenVisible() noexcept;
 void NotifyStrapInputAccepted() noexcept;
 void AdvancePresentedFrame() noexcept;

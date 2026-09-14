@@ -526,7 +526,7 @@ void PublishVrSceneAnchor() {
     static bool s_engaged = false;
     static float s_units_per_meter = 0.0f;
     const mkw::vr::FirstPersonAnchor anchor = mkw::vr::MkwVRFirstPersonGetAnchor();
-    aurora_set_stereo_scene_anchor(anchor.valid ? anchor.anchor_from_scene.data() : nullptr);
+    aurora_set_stereo_scene_anchor_scaled(anchor.valid ? anchor.anchor_from_scene.data() : nullptr,anchor.units_per_meter);
 
     const bool engaged = anchor.valid;
     if (engaged == s_engaged && (!engaged || s_units_per_meter == anchor.units_per_meter)) {

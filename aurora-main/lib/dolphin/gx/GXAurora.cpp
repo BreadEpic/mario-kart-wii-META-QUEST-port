@@ -14,7 +14,12 @@
 
 extern "C" void aurora_clear_native_wheel_vertices() {
   if(!aurora::gx::nativeWheelArrays.empty()) aurora::gx::fifo::drain();
+  aurora::gx::nativeWheelLastMatches.store(aurora::gx::nativeWheelMatches);
+  aurora::gx::nativeWheelMatches=0;
   aurora::gx::nativeWheelArrays.clear();
+}
+extern "C" uint32_t aurora_native_wheel_draw_count() {
+  return aurora::gx::nativeWheelLastMatches.load();
 }
 extern "C" void aurora_set_native_wheel_vertices(const void* source,const void* replacement,
     uint32_t size,const float* modelView) {

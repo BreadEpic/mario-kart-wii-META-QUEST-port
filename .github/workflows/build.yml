@@ -14,6 +14,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  vr:
+    name: VR regressions (no ROM required)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+      - name: Configure standalone VR tests
+        run: cmake -S runtime/tests/standalone -B vr-tests
+      - name: Build VR tests
+        run: cmake --build vr-tests --config Release
+      - name: Test VR
+        run: ctest --test-dir vr-tests -C Release --output-on-failure
+      - name: Test installer rollback
+        run: dotnet run --project Launcher/Installer.IO.Tests -c Release
+      - name: Check VR documentation defaults
+        run: ./Launcher/Test-VrDefaults.ps1
+      - name: Test portable updater rollback
+        run: ./Launcher/Test-VrUpdater.ps1
   translator:
     name: Translator (build + test)
     runs-on: windows-latest

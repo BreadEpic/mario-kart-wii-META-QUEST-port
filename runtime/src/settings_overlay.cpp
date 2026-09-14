@@ -8,6 +8,8 @@
 #include "vr/mkw_vr_first_person.h"
 #include "vr/mkw_vr_policy.h"
 #include "vr/quest_input.h"
+#include "vr/openxr_integration.h"
+#include "ppc_runtime.h"
 #include "wii_remote_input.h"
 
 #include <imgui.h>
@@ -29,11 +31,16 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 #include <shellapi.h>
+#define OPENVR_API_NODLL
+#define USE_SDL
+#include "../../Dependencies/SDL/src/video/openvr/openvr_capi.h"
+#undef USE_SDL
 #endif
 
 #include <dolphin/pad.h>
@@ -800,11 +807,14 @@ void DrawVrStickSettings(const mkw::vr::QuestInput& input) {
     }
 }
 
+#include "vr/onboarding_overlay.inl"
+
 void DrawVrSettings() {
     const auto input = mkw::vr::ReadQuestInputSnapshot();
+    if(g_vrSettingsVisible) VrPointer(input);
     static bool chordHeld = false;
     const bool chord = input.active && mkw::vr::QuestAxis(input.item) > 0.5f && input.trick;
-    if (chord && !chordHeld) SetVrSettingsVisible(!g_vrSettingsVisible);
+    if (chord && !chordHeld && g_tutorial.stage!=mkw::vr::TutorialFlow::Stage::Showing) SetVrSettingsVisible(!g_vrSettingsVisible);
     chordHeld = chord;
     auto& io = ImGui::GetIO();
     static bool wasNavigating = false;
@@ -825,12 +835,20 @@ void DrawVrSettings() {
     if (g_vrSettingsFocus) ImGui::SetNextWindowFocus();
     bool visible = true;
     if (ImGui::Begin("VR Settings", &visible, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize)) {
-        ImGui::TextDisabled("Stick: navigate / adjust   A: confirm   B: back   X + Y: close");
+        ImGui::TextWrapped("Point with either controller and squeeze its trigger to select. Stick: navigate / adjust. Right A: confirm, B: back. Left %s + %s: close.",ControllerKey(0,1),ControllerKey(0,2));
         if (g_vrSettingsFocus) ImGui::SetKeyboardFocusHere();
         if (ImGui::Button("Return to game")) visible = false;
         ImGui::Separator();
         if (ImGui::BeginTabBar("VR categories")) {
             if (ImGui::BeginTabItem("Graphics")) {
+                int shaderQuality=RuntimeConfigFile::Get().vrMenuShaderQuality;
+                if(ImGui::Combo("Menu shader quality",&shaderQuality,"Off\0Low\0Balanced\0High\0")) {
+                    if(RuntimeConfigFile::WriteSetting("vr","menu_shader_quality",std::to_string(shaderQuality))) {
+                        RuntimeConfigFile::Mutable().vrMenuShaderQuality=shaderQuality;
+                        aurora_set_vr_menu_shader_quality(shaderQuality);
+                    }
+                }
+                ImGui::TextWrapped("Applies immediately. Lower quality reduces the GPU cost of the animated menu environment.");
                 float scale = RuntimeConfigFile::VrRenderScale();
                 constexpr float scales[]{0.65f, 0.80f, 1.0f, 1.20f};
                 constexpr const char* names[]{"Performance", "Balanced", "Quality", "Ultra"};
@@ -844,12 +862,21 @@ void DrawVrSettings() {
                 if (ImGui::SliderFloat("Resolution per eye", &percent, 50, 150, "%.0f %%"))
                     RuntimeConfigFile::SetVrRenderScale(percent / 100.0f);
                 ImGui::TextWrapped("The resolution is saved for the next launch. A sharper image requires more GPU power.");
+                bool adaptive=RuntimeConfigFile::Get().vrAdaptiveResolution;
+                if(ImGui::Checkbox("Adaptive resolution (experimental)",&adaptive)) RuntimeConfigFile::SetVrAdaptiveResolution(adaptive);
+                ImGui::TextWrapped("Optional: lowers internal race resolution to 70-100% of the selected quality when new images fall behind, then upscales to the headset. Slow steps reduce oscillation. Does not fix CPU bottlenecks; disabled by default.");
                 if (ImGui::Checkbox("Sharp image (disable Wii copy filter)", &g_disableCopyFilter)) {
                     aurora_set_disable_copy_filter(g_disableCopyFilter);
                     RuntimeConfigFile::SetDisableCopyFilter(g_disableCopyFilter);
                 }
                 if (ImGui::Checkbox("Show FPS", &g_showFps)) RuntimeConfigFile::SetShowFps(g_showFps);
                 ImGui::TextWrapped("Set the headset refresh rate in Quest Link, SteamVR, or Virtual Desktop. Game speed stays normal.");
+                const float rates[]{0,72,80,90,120};
+                const char* rateNames[]{"Runtime default", "72 Hz", "80 Hz", "90 Hz", "120 Hz"};
+                int rate=0;
+                for(int i=1;i<5;++i) if(RuntimeConfigFile::Get().vrRefreshHz==rates[i]) rate=i;
+                if(ImGui::Combo("Preferred refresh (next launch)", &rate, rateNames, 5)) RuntimeConfigFile::SetVrRefreshHz(rates[rate]);
+                ImGui::TextWrapped("Only applied if supported by your runtime. Display FPS can include repeated images; new-image FPS in the log measures fresh rendering.");
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Cameras")) {
@@ -865,10 +892,25 @@ void DrawVrSettings() {
                 ImGui::TextWrapped("Motorbikes use handlebars with grip zones fitted to the bike. Turn horizontally: pull your right hand back to turn right, or your left hand back to turn left. 45 degrees gives full steering. With the original model disabled, a VR handlebar replaces the circular wheel.");
                 ImGui::TextWrapped("Once grabbed, controls stay attached until you release the grip. Larger grab zones help with wide handlebars. Bike handlebars stay level during banking. The seat automatically stays behind the controls.");
                 ImGui::TextWrapped("Large characters use an automatic cockpit world scale. Lightning also shrinks your VR viewpoint and makes the track appear larger. Small kart wheels have an enlarged grab area, including the centre.");
-                ImGui::TextWrapped("Races start in the original camera. Hold the left trigger to brake and reverse in any camera. Press Y to use an item. The menu button still pauses the game.");
+                ImGui::TextWrapped("Races start in your chosen default camera. Hold the left trigger to brake and reverse. Y: item. SteamVR: tap X for tricks, hold X to pause Mario Kart. X + Y: VR settings.");
+                int defaultCamera=RuntimeConfigFile::Get().vrDefaultCamera;
+                if(ImGui::Combo("Default race camera",&defaultCamera,"Original / third person\0First person\0Diorama\0")) {
+                    if(RuntimeConfigFile::WriteSetting("vr","default_camera",std::to_string(defaultCamera))) RuntimeConfigFile::Mutable().vrDefaultCamera=defaultCamera;
+                }
+                if(ImGui::Button("Show control tutorials again")) {
+                    const bool tutorialReset = RuntimeConfigFile::WriteSetting("vr","tutorial_completed","0");
+                    const bool welcomeReset = RuntimeConfigFile::WriteSetting("vr","welcome_complete","false");
+                    if(tutorialReset && welcomeReset) {
+                        RuntimeConfigFile::Mutable().vrTutorialCompleted=0;
+                        RuntimeConfigFile::Mutable().vrWelcomeComplete=false;
+                        g_tutorial={};
+                        SetVrSettingsVisible(false);
+                    }
+                }
                 if (mode == 1) {
-                    if (nativeWheel && !mkw::vr::MkwVRFirstPersonGetAnchor().native_wheel.valid)
-                        ImGui::TextWrapped("Original grip positions unavailable: using the VR wheel for now.");
+                    if (nativeWheel && (!mkw::vr::MkwVRFirstPersonGetAnchor().native_wheel.valid ||
+                        !mkw::vr::MkwVRFirstPersonGetAnchor().native_mesh_prepared))
+                        ImGui::TextWrapped("Original grip positions or animated mesh unavailable: using the VR control for now.");
                     bool changed = false;
                     float eyeUp = g_vrFirstPersonHeadUp - 1.1f;
                     float eyeForward = g_vrFirstPersonHeadForward - 1.2f;
@@ -907,6 +949,17 @@ void DrawVrSettings() {
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Display")) {
+                float distance=RuntimeConfigFile::VrHudDistanceMeters(2.0f);
+                float width=RuntimeConfigFile::VrHudWidthMeters(2.4f);
+                bool hudChanged=ImGui::SliderFloat("Forward HUD distance", &distance, .5f, 5, "%.2f m");
+                hudChanged |= ImGui::SliderFloat("Forward HUD width", &width, .5f, 4, "%.2f m");
+                if(hudChanged) {
+                    RuntimeConfigFile::SetVrHudDistanceMeters(distance);
+                    RuntimeConfigFile::SetVrHudWidthMeters(width);
+                    auto config=mkw::vr::MkwVRPolicyGetSnapshot().config;
+                    config.hud_distance_meters=distance;config.hud_width_meters=width;
+                    mkw::vr::MkwVRPolicyConfigure(config);
+                }
                 if (ImGui::Checkbox("Map and items on the left hand", &g_vrHudVirtualScreen)) {
                     RuntimeConfigFile::SetVrHudVirtualScreen(g_vrHudVirtualScreen);
                     ApplyVrHudVirtualScreen();
@@ -916,6 +969,58 @@ void DrawVrSettings() {
             }
             if (ImGui::BeginTabItem("Stick")) {
                 DrawVrStickSettings(input);
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Driving")) {
+                bool swapItem=RuntimeConfigFile::Get().vrSwapItemTrick;
+                bool swapDrift=RuntimeConfigFile::Get().vrSwapCockpitDriftBrake;
+                bool mappingChanged=ImGui::Checkbox("Item: X / trick: Y (default: item Y / trick X)", &swapItem);
+                mappingChanged |= ImGui::Checkbox("Cockpit drift: B / brake: A (default: drift A)", &swapDrift);
+                if(mappingChanged) {
+                    RuntimeConfigFile::SetVrButtonMapping(swapItem,swapDrift);
+                    mkw::vr::SetQuestButtonMapping({swapItem,swapDrift});
+                }
+                ImGui::TextWrapped("X + Y always opens settings. Left trigger always brakes / reverses. Menu navigation stays A / B.");
+                auto tuning=RuntimeConfigFile::VrWheelTuning();
+                bool changed=false;
+                changed |= ImGui::SliderFloat("Kart rotation for full steering", &tuning.kartDegrees, 20, 180, "%.0f degrees");
+                changed |= ImGui::SliderFloat("Bike rotation for full steering", &tuning.bikeDegrees, 20, 90, "%.0f degrees");
+                changed |= ImGui::SliderFloat("Grab depth tolerance", &tuning.grabDistance, .15f, .8f, "%.2f m");
+                changed |= ImGui::SliderFloat("Grab assistance", &tuning.grabAssist, .7f, 2, "%.2f x");
+                changed |= ImGui::SliderFloat("Steering response", &tuning.response, .5f, 2, "%.2f x");
+                changed |= ImGui::SliderFloat("Tracking loss tolerance", &tuning.trackingGrace, .05f, .5f, "%.2f s");
+                changed |= ImGui::Checkbox("Vibration on grab / release", &tuning.haptics);
+                if(ImGui::Button("Reset driving settings")) { tuning={}; changed=true; }
+                if(changed) RuntimeConfigFile::SetVrWheelTuning(tuning);
+                ImGui::TextWrapped("Applies immediately. Grab tolerance only affects acquisition: release the grip to let go. Lower rotation reaches full steering sooner. The left stick still aims items forward or backward while holding the wheel.");
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Diagnostics")) {
+                const auto d=mkw::vr::OpenXRGetDiagnostics();
+                ImGui::Text("OpenXR: %s",mkw::vr::OpenXRIsRunning()?"running":"inactive");
+                ImGui::Text("Displayed: %.1f FPS   New images: %.1f FPS", d.displayFps,d.newImageFps);
+                ImGui::Text("Runtime: %.1f Hz   Per eye: %u x %u",d.runtimeHz,d.width,d.height);
+                ImGui::Text("Internal race resolution: %u x %u (%.0f%%)",uint32_t(d.width*d.rasterScale),uint32_t(d.height*d.rasterScale),d.rasterScale*100);
+                const auto anchor=mkw::vr::MkwVRFirstPersonGetAnchor();
+                ImGui::Text("Vehicle grip: %s / mesh prepared: %s",anchor.native_wheel.valid?"yes":"no",anchor.native_mesh_prepared?"yes":"no");
+                ImGui::Text("Native wheel draw matches (last game frame): %u",aurora_native_wheel_draw_count());
+                ImGui::TextWrapped("Zero matches can mean the wheel is outside the view or that this model needs additional support.");
+                ImGui::Text("Presentation interval: p95 %.2f ms / p99 %.2f ms",d.intervalP95,d.intervalP99);
+                ImGui::TextWrapped("Updated every five seconds in asynchronous mode. Intervals measure presentation regularity, not GPU execution time. Repeated images keep head tracking smooth but do not add new game motion.");
+                static std::string exportStatus;
+                if(ImGui::Button("Export VR diagnostics")) {
+                    std::ostringstream report;
+                    report<<"WiiCompiled VR diagnostics\nBuild: "<<__DATE__<<" "<<__TIME__
+                        <<"\nDisplay FPS: "<<d.displayFps<<"\nNew-image FPS: "<<d.newImageFps
+                        <<"\nRuntime Hz: "<<d.runtimeHz<<"\nEye size: "<<d.width<<" x "<<d.height
+                        <<"\nPresentation p95/p99 ms: "<<d.intervalP95<<" / "<<d.intervalP99
+                        <<"\nRender scale: "<<RuntimeConfigFile::VrRenderScale()
+                        <<"\nNative wheel: "<<RuntimeConfigFile::VrNativeSteeringWheel()
+                        <<"\nCamera: "<<int(mkw::vr::MkwVRGetCameraMode())<<"\n";
+                    const auto path=RuntimeConfigFile::ResolveConfigPath().parent_path()/"VR-diagnostics.txt";
+                    exportStatus=mkw::platform::AtomicWriteText(path,report.str())?"Saved VR-diagnostics.txt next to Config.toml (no ROM or personal paths included).":"Unable to save diagnostics.";
+                }
+                ImGui::TextWrapped("%s",exportStatus.c_str());
                 ImGui::EndTabItem();
             }
             ImGui::EndTabBar();
@@ -1239,6 +1344,7 @@ void InitializeRuntimeSettings() noexcept {
     g_displayMode = static_cast<int>(aurora_get_display_mode());
     aurora_set_disable_copy_filter(g_disableCopyFilter);
     aurora_set_stereo_stop_at_display_copy(g_vrStopAtDisplayCopy);
+    aurora_set_vr_menu_shader_quality(RuntimeConfigFile::Get().vrMenuShaderQuality);
     aurora_set_stereo_skip_copy_clears(g_vrSkipCopyClears);
     ApplyVrHudVirtualScreen();
     aurora_set_skip_unready_pipelines(g_skipUnreadyPipelines);
@@ -1264,7 +1370,9 @@ void HandleEvents(const AuroraEvent* events) noexcept {
         }
         controller_mapping_wizard::HandleSdlEvent(ev->sdl);
         if (IsToggleKey(ev->sdl, SDL_SCANCODE_F10)) {
-            if (g_vrEnabled) SetVrSettingsVisible(!g_vrSettingsVisible); else SetTopBarVisible(!g_topBarVisible);
+            if (g_tutorial.stage!=mkw::vr::TutorialFlow::Stage::Showing) {
+                if (g_vrEnabled) SetVrSettingsVisible(!g_vrSettingsVisible); else SetTopBarVisible(!g_topBarVisible);
+            }
         }
         if (IsMouseActivity(ev->sdl)) {
             g_lastMouseActivity = Clock::now();
@@ -1281,6 +1389,12 @@ void Draw() noexcept {
     // its "communications interrupted" prompt without polling pads). Same guest
     // thread as PADRead, so no concurrent access to the scanner's state.
     WiiRemoteInput::Poll();
+    if(g_vrEnabled) {
+        const auto input=mkw::vr::ReadQuestInputSnapshot();
+        const auto policy=mkw::vr::MkwVRPolicyGetSnapshot();
+        if(input.active && (g_vrSettingsVisible || policy.scene.mode!=mkw::vr::VRSceneMode::Race ||
+            g_tutorial.stage==mkw::vr::TutorialFlow::Stage::Showing)) EnsureTutorialControllerModels(input.steamvr);
+    }
     ApplyConfiguredMappings();
     PersistDisplayModeIfChanged();
     UpdateCursorAutoHide();
@@ -1294,6 +1408,28 @@ void Draw() noexcept {
     // The wizard captures raw presses; keep them out of the game.
     PADBlockInput(g_vrSettingsVisible || controller_mapping_wizard::IsActive());
     DrawStartupScreen();
+    DrawRaceTutorial();
+}
+
+bool VrWelcomePending() noexcept { return g_vrEnabled && !RuntimeConfigFile::Get().vrWelcomeComplete; }
+void DrawVrWelcome() noexcept {
+    aurora_wait_for_frame_worker();
+    DrawWelcomePanel();
+}
+void DrawVrIntroPreview(int kind) noexcept {
+    aurora_wait_for_frame_worker();
+    if(kind==0) { DrawWelcomePanel();return; }
+    mkw::vr::QuestInput example{};example.active=true;example.steamvr=true;
+    for(int hand=0;hand<2;++hand) {
+        example.ui_hands[hand].valid=true;
+        example.ui_hands[hand].position={hand?.2f:-.2f,-.2f,-.5f};
+    }
+    if(BeginIntroduction(kind==2?"First-person driving controls":"Third-person and diorama controls")) {
+        ImGui::TextWrapped("Mario Kart is paused. Point at Continue with your right controller and pull its trigger when you are ready.");
+        DrawControllerGuide(example,kind==2);
+        ImGui::Button("Continue racing",ImVec2(-1,48));
+    }
+    EndIntroduction();
 }
 
 bool StartupScreenVisible() noexcept {

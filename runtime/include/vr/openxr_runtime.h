@@ -172,13 +172,14 @@ public:
     // Called only on the XR owner thread, at the predicted display time.
     void PollControllers(XrTime time);
     void RequestDisplayRefreshRate(float hz);
+    void PulseGrip(size_t hand, bool grabbed);
     bool ConsumeCameraClick() { const bool click = m_camera_clicked; m_camera_clicked = false; return click; }
     bool LeftGripValid() const { return m_left_grip_valid; }
     const XrPosef& LeftGripPose() const { return m_left_grip_pose; }
     bool RightGripValid() const { return m_right_grip_valid; }
     const XrPosef& RightGripPose() const { return m_right_grip_pose; }
     float HandSqueeze(size_t hand) const { return m_squeeze_values[hand]; }
-    void PublishDrivingInput(bool cockpit, float steering, bool held);
+    void PublishDrivingInput(bool cockpit, float steering, bool held, float angle);
 
     bool IsInitialized() const { return m_instance != XR_NULL_HANDLE; }
     bool HasSession() const { return m_session != XR_NULL_HANDLE; }
@@ -199,6 +200,8 @@ public:
     XrSession Session() const { return m_session; }
     XrSpace AppSpace() const { return m_app_space; }
     XrSpace ViewSpace() const { return m_view_space; }
+    bool PanelAnchored() const { return m_panel_anchored; }
+    XrPosef PanelOrigin() const { return m_panel_origin; }
     XrSessionState SessionState() const { return m_session_state; }
     uint64_t SessionRunSerial() const { return m_session_run_serial; }
     XrReferenceSpaceType AppSpaceType() const { return m_app_space_type; }
@@ -223,6 +226,9 @@ public:
     const OpenXRError& LastError() const { return m_last_error; }
 
 private:
+    bool m_panel_anchored = false;
+    XrTime m_panel_tracking_since = 0;
+    XrPosef m_panel_origin{{0,0,0,1},{0,0,0}};
     enum class FramePhase {
         Idle,
         Waited,
@@ -236,6 +242,7 @@ private:
     XrAction m_grip_action = XR_NULL_HANDLE;
     XrAction m_right_grip_action = XR_NULL_HANDLE;
     std::array<XrAction, 2> m_squeeze_actions{};
+    std::array<XrAction, 2> m_haptic_actions{};
     XrAction m_item_trigger_action = XR_NULL_HANDLE;
     XrSpace m_right_grip_space = XR_NULL_HANDLE;
     XrPosef m_right_grip_pose{};
@@ -245,12 +252,19 @@ private:
     float m_item_trigger = 0;
     bool m_cockpit_input = false, m_wheel_held = false;
     float m_wheel_steering = 0;
+    float m_wheel_angle = 0;
     std::array<XrAction, kOpenXRControllerActionCount> m_game_actions{};
     XrSpace m_grip_space = XR_NULL_HANDLE;
     XrPosef m_left_grip_pose{};
     bool m_left_grip_valid = false;
     bool m_camera_clicked = false;
     CameraClickLatch m_camera_latch;
+    XrAction m_steam_trick_action=XR_NULL_HANDLE;
+    XrAction m_ui_pointer_action=XR_NULL_HANDLE;
+    XrSpace m_ui_pointer_space=XR_NULL_HANDLE;
+    XrAction m_ui_left_pointer_action=XR_NULL_HANDLE;
+    XrSpace m_ui_left_pointer_space=XR_NULL_HANDLE;
+    SteamVrTrickPause m_steam_trick_pause;
 
     bool EnumerateInstanceCapabilities();
     bool CreateInstance();

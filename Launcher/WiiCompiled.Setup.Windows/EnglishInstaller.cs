@@ -27,6 +27,10 @@ internal static class EnglishInstaller
             AutoSize = true
         };
         private Button _retroBrowse = null!;
+        private Button _romBrowse = null!, _destinationBrowse = null!;
+        private readonly Button _cancel = new() { Text = "Cancel", AutoSize = true, Enabled = false };
+        private CancellationTokenSource? _operation;
+        private bool _closeAfterCancel;
         private readonly CheckBox _portable = new() { Text = "Create a portable installation", AutoSize = true };
         private readonly Button _install = new() { Text = "Install", AutoSize = true, Padding = new Padding(18, 5, 18, 5) };
         private readonly ProgressBar _progress = new() { Dock = DockStyle.Fill, Minimum = 0, Maximum = 100 };
@@ -95,8 +99,8 @@ internal static class EnglishInstaller
             layout.SetColumnSpan(title, 3);
             layout.Controls.Add(explanation, 0, 1);
             layout.SetColumnSpan(explanation, 3);
-            AddPathRow(layout, 2, "PAL disc image", _romPath, "Browse...", BrowseRom);
-            AddPathRow(layout, 3, "Install location", _destination, "Browse...", BrowseDestination);
+            _romBrowse = AddPathRow(layout, 2, "PAL disc image", _romPath, "Browse...", BrowseRom);
+            _destinationBrowse = AddPathRow(layout, 3, "Install location", _destination, "Browse...", BrowseDestination);
             layout.Controls.Add(_downloadRetro, 1, 4);
             layout.SetColumnSpan(_downloadRetro, 2);
             _retroBrowse = AddPathRow(layout, 5, "Existing RR folder", _retroPath, "Browse...", BrowseRetro);
@@ -127,8 +131,18 @@ internal static class EnglishInstaller
             var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, AutoSize = true };
             var close = new Button { Text = "Close", AutoSize = true, Padding = new Padding(12, 5, 12, 5) };
             close.Click += (_, _) => Close();
+            _cancel.Click += (_, _) => { _operation?.Cancel(); _status.Text = "Canceling safely..."; };
+            FormClosing += (_, e) =>
+            {
+                if (_operation is null) return;
+                e.Cancel = true;
+                _closeAfterCancel = true;
+                _operation.Cancel();
+                _status.Text = "Canceling safely before closing...";
+            };
             _install.Click += async (_, _) => await InstallAsync();
             buttons.Controls.Add(close);
+            buttons.Controls.Add(_cancel);
             buttons.Controls.Add(_install);
             layout.Controls.Add(buttons, 0, 10);
             layout.SetColumnSpan(buttons, 3);
@@ -215,22 +229,26 @@ internal static class EnglishInstaller
             }
 
             SetBusy(true);
+            _operation = new CancellationTokenSource();
+            var cancellation = _operation.Token;
+            PackReplacement? replacement = null;
             _progress.Value = 0;
             _details.Clear();
             _status.Text = "Starting setup...";
-            var installDirectory = _portable.Checked
-                ? Path.Combine(Path.GetFullPath(_destination.Text), "Install")
-                : Path.GetFullPath(_destination.Text);
             try
             {
+                var portable = _portable.Checked;
+                var romPath = Path.GetFullPath(_romPath.Text);
+                var destination = Path.GetFullPath(_destination.Text);
+                var installDirectory = portable ? Path.Combine(destination, "Install") : destination;
                 var retroPath = _retroPath.Text;
                 if (_downloadRetro.Checked)
                 {
-                    var retroParent = _portable.Checked
-                        ? Path.GetFullPath(_destination.Text)
-                        : installDirectory;
-                    retroPath = await DownloadLatestRetroRewindAsync(retroParent);
+                    var retroParent = portable ? destination : installDirectory;
+                    replacement = await DownloadLatestRetroRewindAsync(retroParent, cancellation);
+                    retroPath = replacement.Destination;
                 }
+                cancellation.ThrowIfCancellationRequested();
 
                 var start = new ProcessStartInfo(executable)
                 {
@@ -242,11 +260,11 @@ internal static class EnglishInstaller
                 };
                 start.ArgumentList.Add("--silent");
                 start.ArgumentList.Add("--game");
-                start.ArgumentList.Add(_romPath.Text);
+                start.ArgumentList.Add(romPath);
                 start.ArgumentList.Add("--install-dir");
                 start.ArgumentList.Add(installDirectory);
                 start.ArgumentList.Add("--progress-json");
-                if (_portable.Checked) start.ArgumentList.Add("--portable");
+                if (portable) start.ArgumentList.Add("--portable");
                 if (!string.IsNullOrWhiteSpace(retroPath))
                 {
                     start.ArgumentList.Add("--retro-dir");
@@ -255,6 +273,12 @@ internal static class EnglishInstaller
                 }
 
                 using var process = Process.Start(start) ?? throw new InvalidOperationException("Setup could not be started.");
+                using var terminate = cancellation.Register(() =>
+                {
+                    try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+                    catch (InvalidOperationException) { }
+                    catch (System.ComponentModel.Win32Exception) { }
+                });
                 var stderrTask = process.StandardError.ReadToEndAsync();
                 string? resultError = null;
                 while (await process.StandardOutput.ReadLineAsync() is { } line)
@@ -286,16 +310,23 @@ internal static class EnglishInstaller
                 }
                 await process.WaitForExitAsync();
                 var diagnostics = await stderrTask;
+                cancellation.ThrowIfCancellationRequested();
                 if (process.ExitCode != 0 || resultError is not null)
                     throw new InvalidOperationException(resultError ?? LastUsefulLine(diagnostics) ?? $"Setup exited with code {process.ExitCode}.");
 
+                replacement?.Commit();
                 _progress.Value = 100;
                 _status.Text = "Installation complete.";
                 MessageBox.Show(this,
-                    _portable.Checked
+                    portable
                         ? "Portable installation complete. You can move the entire selected folder to another location."
                         : "WiiCompiled VR was installed successfully.",
                     Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+            {
+                _status.Text = "Installation canceled. Restoring the previous Retro Rewind pack...";
+                _details.AppendText(_status.Text + Environment.NewLine);
             }
             catch (Exception exception)
             {
@@ -307,13 +338,24 @@ internal static class EnglishInstaller
             }
             finally
             {
+                try { replacement?.Dispose(); }
+                catch (Exception restoreError)
+                {
+                    _details.AppendText("Automatic restore failed. Your previous pack is preserved in a RetroRewind6.backup-* folder: " + restoreError.Message + Environment.NewLine);
+                    _closeAfterCancel = false;
+                }
+                _operation.Dispose();
+                _operation = null;
                 SetBusy(false);
+                if (_closeAfterCancel) Close();
             }
         }
 
         private void SetBusy(bool busy)
         {
             _install.Enabled = !busy;
+            _cancel.Enabled = busy;
+            _romPath.Enabled = _romBrowse.Enabled = _destination.Enabled = _destinationBrowse.Enabled = !busy;
             _portable.Enabled = !busy;
             _downloadRetro.Enabled = !busy;
             _retroPath.Enabled = !busy && !_downloadRetro.Checked;
@@ -321,7 +363,7 @@ internal static class EnglishInstaller
             UseWaitCursor = busy;
         }
 
-        private async Task<string> DownloadLatestRetroRewindAsync(string destinationParent)
+        private async Task<PackReplacement> DownloadLatestRetroRewindAsync(string destinationParent, CancellationToken cancellation)
         {
             const string officialEndpoint = "https://update.rwfc.net/RetroRewind/RetroRewindInstall.txt";
             // Keep staging on the destination volume because Directory.Move cannot cross drives.
@@ -337,8 +379,10 @@ internal static class EnglishInstaller
                 _status.Text = "Finding the latest Retro Rewind release...";
                 _details.AppendText(_status.Text + Environment.NewLine);
                 using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-                client.DefaultRequestHeaders.UserAgent.ParseAdd("WiiCompiled-VR-Setup/0.6.1");
-                var downloadText = (await client.GetStringAsync(officialEndpoint)).Trim();
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("WiiCompiled-VR-Setup/" + ProductInfo.Version);
+                using var metadataTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+                metadataTimeout.CancelAfter(TimeSpan.FromSeconds(30));
+                var downloadText = (await client.GetStringAsync(officialEndpoint, metadataTimeout.Token)).Trim();
                 if (!Uri.TryCreate(downloadText, UriKind.Absolute, out var downloadUri) ||
                     downloadUri.Scheme != Uri.UriSchemeHttps ||
                     !(downloadUri.Host.Equals("update.rwfc.net", StringComparison.OrdinalIgnoreCase) ||
@@ -347,38 +391,26 @@ internal static class EnglishInstaller
 
                 _status.Text = "Downloading Retro Rewind...";
                 _details.AppendText(_status.Text + Environment.NewLine);
-                using var response = await client.GetAsync(downloadUri, HttpCompletionOption.ResponseHeadersRead);
-                response.EnsureSuccessStatusCode();
-                var total = response.Content.Headers.ContentLength;
-                await using (var input = await response.Content.ReadAsStreamAsync())
-                await using (var output = new FileStream(archivePath, FileMode.Create, FileAccess.Write, FileShare.None))
+                await ResumableDownload.DownloadAsync(client, downloadUri, archivePath, (received, total) =>
                 {
-                    var buffer = new byte[1024 * 1024];
-                    long received = 0;
-                    int read;
-                    while ((read = await input.ReadAsync(buffer)) > 0)
-                    {
-                        await output.WriteAsync(buffer.AsMemory(0, read));
-                        received += read;
-                        if (total is > 0)
-                            _progress.Value = Math.Clamp(5 + (int)(received * 30 / total.Value), 5, 35);
-                    }
-                }
+                    _status.Text = $"Downloading Retro Rewind: {received / 1048576:N0} MB" +
+                        (total is > 0 ? $" / {total.Value / 1048576:N0} MB" : "");
+                    if (total is > 0) _progress.Value = Math.Clamp(5 + (int)(received * 30 / total.Value), 5, 35);
+                }, cancellation);
 
                 _status.Text = "Extracting Retro Rewind...";
                 _details.AppendText(_status.Text + Environment.NewLine);
                 _progress.Value = 36;
-                await Task.Run(() => ExtractArchiveSafely(archivePath, extractionPath));
+                await Task.Run(() => ExtractArchiveSafely(archivePath, extractionPath, cancellation), cancellation);
                 var source = Path.Combine(extractionPath, "RetroRewind6");
                 if (!File.Exists(Path.Combine(source, "Binaries", "Code.pul")))
                     throw new InvalidDataException("The official archive does not contain RetroRewind6\\Binaries\\Code.pul.");
 
                 var destination = Path.Combine(destinationParent, "RetroRewind6");
-                if (Directory.Exists(destination)) Directory.Delete(destination, recursive: true);
-                Directory.Move(source, destination);
+                cancellation.ThrowIfCancellationRequested();
                 _progress.Value = 40;
                 _details.AppendText("Retro Rewind is ready. Starting VR compilation..." + Environment.NewLine);
-                return destination;
+                return new PackReplacement(source, destination);
             }
             finally
             {
@@ -394,13 +426,18 @@ internal static class EnglishInstaller
             }
         }
 
-        private static void ExtractArchiveSafely(string archivePath, string destination)
+        private static void ExtractArchiveSafely(string archivePath, string destination, CancellationToken cancellation)
         {
             var root = Path.GetFullPath(destination).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
             Directory.CreateDirectory(root);
             using var archive = ZipFile.OpenRead(archivePath);
+            var expandedBytes = archive.Entries.Sum(entry => entry.Length);
+            var drive = new DriveInfo(Path.GetPathRoot(root)!);
+            if (expandedBytes > drive.AvailableFreeSpace - 512L * 1024 * 1024)
+                throw new IOException("Not enough free space to extract Retro Rewind safely.");
             foreach (var entry in archive.Entries)
             {
+                cancellation.ThrowIfCancellationRequested();
                 var outputPath = Path.GetFullPath(Path.Combine(root,
                     entry.FullName.Replace('/', Path.DirectorySeparatorChar)));
                 if (!outputPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))

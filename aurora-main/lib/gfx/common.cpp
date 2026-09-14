@@ -1270,7 +1270,7 @@ static bool prepare_stereo_replay_uniforms(const StereoReplayFrame& stereoFrame)
   // A draw is replayed per eye when it carries the game camera (perspective) or
   // when it is 2D content the virtual screen is claiming.
   const auto replayed = [&](const gx::UniformReplayLayout& layout) noexcept {
-    return !layout.cameraOverlay && (layout.perspective || (hudScreen.valid() && !layout.nativeEfbEffect));
+    return layout.perspective || (hudScreen.valid() && !layout.nativeEfbEffect);
   };
   size_t requiredBytes = 0;
   size_t efbPassCount = 0;
@@ -1359,7 +1359,7 @@ static bool prepare_stereo_replay_uniforms(const StereoReplayFrame& stereoFrame)
                   sizeof(gameProjection));
       // Preserve the world's actual reversed-Z mapping for the tracked hands.
       // Model positions and headset translation use game units; hands use metres.
-      if(layout.perspective && !layout.nativeEfbEffect && gameProjection.m2[3]!=0 &&
+      if(layout.perspective && !layout.cameraOverlay && !layout.nativeEfbEffect && gameProjection.m2[3]!=0 &&
          drawViewport.width>=displayRegion.width*0.9f && drawViewport.height>=displayRegion.height*0.9f) {
         const auto row=stereo_replay::backend_ndc_depth_row(gameProjection,gx::UseReversedZ);
         const float low=std::clamp(std::min(drawViewport.znear,drawViewport.zfar),0.f,1.f);
@@ -1382,6 +1382,12 @@ static bool prepare_stereo_replay_uniforms(const StereoReplayFrame& stereoFrame)
         if (layout.perspective) {
           const auto projection = stereo_replay::compose_projection(eye.projection, gameProjection);
           std::memcpy(uniform.data() + layout.projectionOffset, &projection, sizeof(projection));
+
+          // Camera-attached effects still need the asymmetric eye frustum.
+          // Reusing the mono projection gives each eye a different ray for the
+          // same highlight (double sun/glare). Keep their camera-space matrices
+          // so cockpit relocation and eye translation cannot move these overlays.
+          if (layout.cameraOverlay) continue;
 
           for (uint32_t matrix = 0; matrix < layout.positionMatrixCount; ++matrix) {
             if ((layout.positionMatrixMask & (1u << matrix)) == 0) {
@@ -1576,6 +1582,11 @@ struct RenderInvocation {
   bool encodeTextureBakes = true;
   bool encodeResolves = true;
   bool captureDepth = true;
+  const StereoReplayFrame* cockpitFrame = nullptr;
+  wgpu::CommandEncoder* cockpitEncoder = nullptr;
+  cockpit::SceneDepth cockpitDepth{};
+  bool* cockpitDrawn = nullptr;
+  bool* sceneDrawn = nullptr;
 };
 
 static void render_pass_impl(const wgpu::RenderPassEncoder& pass, const std::vector<RenderPass>& passes, u32 idx,
@@ -1775,6 +1786,7 @@ void render_stereo_eye(SealedFrame& frame, wgpu::CommandEncoder& cmd, const Ster
   // past that copy blanks the very image the game presented.
   const int32_t lastPass = get_stereo_stop_at_display_copy() ? displaySource.lastDisplayCopyPass : -1;
   cockpit::SceneDepth cockpitDepth{};
+  bool cockpitDrawn=false,sceneDrawn=false;
   for(size_t i=0;i<frame.data().passes.size();++i) {
     if(lastPass>=0 && i>static_cast<size_t>(lastPass)) break;
     if(frame.data().passes[i].cockpitDepth.valid) cockpitDepth=frame.data().passes[i].cockpitDepth;
@@ -1791,8 +1803,13 @@ void render_stereo_eye(SealedFrame& frame, wgpu::CommandEncoder& cmd, const Ster
                   .encodeTextureBakes = false,
                   .encodeResolves = false,
                   .captureDepth = false,
+                  .cockpitFrame = &stereoFrame,
+                  .cockpitEncoder = &cmd,
+                  .cockpitDepth = cockpitDepth,
+                  .cockpitDrawn = &cockpitDrawn,
+                  .sceneDrawn = &sceneDrawn,
               });
-  cockpit::render(cmd, stereoFrame, eye, cockpitDepth);
+  if(!cockpitDrawn) cockpit::render(cmd, stereoFrame, eye, cockpitDepth);
 }
 
 void render(wgpu::CommandEncoder& cmd, int32_t interpolatedFrame, bool finalize) {
@@ -1974,6 +1991,19 @@ static void render_pass_impl(const wgpu::RenderPassEncoder& pass, const std::vec
                    static_cast<size_t>(invocation.interpolatedFrame) < draw.gx.interpolatedUniformRanges.size() &&
                    draw.gx.interpolatedUniformRanges[invocation.interpolatedFrame].size != 0) {
           uniformOverride = &draw.gx.interpolatedUniformRanges[invocation.interpolatedFrame];
+        }
+        // Draw tracked controls against world depth before the first HUD draw
+        // can write a screen-plane depth over it. Keep the existing pass open.
+        if(invocation.cockpitFrame && invocation.cockpitDepth.valid) {
+          if(draw.gx.uniformReplayLayout.perspective) *invocation.sceneDrawn=true;
+          if(virtualScreenDraw && *invocation.sceneDrawn && !*invocation.cockpitDrawn) {
+            cockpit::render(*invocation.cockpitEncoder,*invocation.cockpitFrame,invocation.stereoEye,
+                invocation.cockpitDepth,&pass);
+            *invocation.cockpitDrawn=true;
+            encodeState={};encodeState.boundTextureBindGroup=gx::g_emptyTextureBindGroup.Get();
+            pass.SetBindGroup(0,g_staticBindGroup);pass.SetBindGroup(2,gx::g_emptyTextureBindGroup);
+            scissorStateKnown=viewportStateKnown=false;
+          }
         }
         // Such a draw no longer lands where the game aimed it, while the
         // recorded scissor still describes the rectangle it occupied on the flat

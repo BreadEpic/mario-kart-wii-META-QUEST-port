@@ -13,6 +13,13 @@ enum class OpenXRStartupResult {
     Prepared,
     Unavailable,
 };
+struct OpenXRDiagnostics {
+    float displayFps=0,newImageFps=0,runtimeHz=0,intervalP95=0,intervalP99=0;
+    uint32_t width=0,height=0;
+    uint64_t canceled=0;
+    float rasterScale=1;
+};
+OpenXRDiagnostics OpenXRGetDiagnostics();
 
 // Performs the OpenXR instance/system and graphics-requirements work that must
 // happen before Aurora selects an adapter. On success this may force the

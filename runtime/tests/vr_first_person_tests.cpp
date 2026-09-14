@@ -378,6 +378,36 @@ int main() {
     CheckNear(mesh[0].y,43,"native wheel quarter turn Y");
     CheckNear(mesh.back().z,40,"dashboard is not deformed");
     CheckNear(original[0].x,13,"original mesh retained for other vehicles");
+    // Spins around all three axes must animate the chassis without taking the
+    // held wheel with it. Exercise the render-copy correction at normal and
+    // lightning scale, with an independent physical steering angle.
+    for(float scale : {1.0f,0.3f}) for(int axis=0;axis<3;++axis) for(int step=0;step<=36;++step) {
+        const float a=step*6.2831853f/36,c=std::cos(a),s=std::sin(a);
+        Mtx34 spin=kIdentityMtx34;
+        const int u=(axis+1)%3,v=(axis+2)%3;
+        spin[u*4+u]=c;spin[u*4+v]=-s;spin[v*4+u]=s;spin[v*4+v]=c;
+        spin[3]=17;spin[7]=24;spin[11]=-31;
+        Mtx34 stable=kIdentityMtx34;stable[3]=17;stable[7]=24;stable[11]=-31;
+        stable=ScaleModelBasis(stable,{scale,scale,scale});
+        const auto rendered=ScaleModelBasis(spin,{scale,scale,scale});
+        Mtx34 inverseRendered{};
+        Check(InvertMtx(rendered,inverseRendered),"animated body is invertible at lightning scale");
+        const auto correction=ComposeMtx(inverseRendered,stable);
+        auto corrected=original,turned=original;
+        Check(RotateNativeWheelVertices(corrected,{0,30,-8},13,0.6f,&correction)==32,
+              "spin correction selects only wheel vertices");
+        RotateNativeWheelVertices(turned,{0,30,-8},13,0.6f);
+        for(size_t i=0;i<32;++i) {
+            const auto actual=detail::TransformPoint(rendered,corrected[i].x,corrected[i].y,corrected[i].z);
+            const auto expected=detail::TransformPoint(stable,turned[i].x,turned[i].y,turned[i].z);
+            CheckNear(actual.x,expected.x,"wheel stays stable during spin X");
+            CheckNear(actual.y,expected.y,"wheel stays stable during spin Y");
+            CheckNear(actual.z,expected.z,"wheel stays stable during spin Z");
+        }
+        CheckNear(corrected.back().x,original.back().x,"chassis keeps its own animation X");
+        CheckNear(corrected.back().y,original.back().y,"chassis keeps its own animation Y");
+        CheckNear(corrected.back().z,original.back().z,"chassis keeps its own animation Z");
+    }
     Check(!ComputeNativeWheelGeometry(driver,{0,0,0},{0,0,0},100).valid,"missing hand span falls back");
     Check(!ComputeNativeWheelGeometry(driver,{-24,80,75},{24,80,75},0).valid,"invalid world scale falls back");
     if (g_failures != 0) {

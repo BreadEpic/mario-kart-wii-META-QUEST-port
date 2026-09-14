@@ -19,7 +19,7 @@ supported release targets.
 
 ## Configuration
 
-OpenXR is disabled by default. The configuration file is next to the installed game and can contain:
+The generic runtime defaults to OpenXR disabled; the VR installer enables it. The configuration file is next to the installed game and can contain:
 
 ```toml
 [vr]
@@ -33,9 +33,10 @@ hud_virtual_screen = true
 stop_at_display_copy = true
 skip_copy_clears = true
 first_person = false
-first_person_units_per_meter = 10.0
-first_person_head_up_meters = 1.0
-first_person_head_forward_meters = 0.0
+native_steering_wheel = true
+first_person_units_per_meter = 100.0
+first_person_head_up_meters = 1.1
+first_person_head_forward_meters = 1.2
 first_person_head_right_meters = 0.0
 ```
 
@@ -51,10 +52,24 @@ The first-person values control the camera described below and are also availabl
 
 ## Camera and HUD
 
-Every race starts with the original game camera. During an immersive race, click the right
+On the first VR launch, a controller-pointer panel lets you choose the default camera before
+the game starts. Aim the right controller and pull its trigger to select; a mouse also works.
+Every race starts with that saved camera. During an immersive race, click the right
 thumbstick to cycle through the original camera, the first-person cockpit, and the distant diorama
 camera. The click is latched, so holding the stick advances only once. Menus do not consume camera
 changes. Profiles without a right-stick click keep their normal camera.
+
+The first single-player race requests Mario Kart's pause and shows a controller guide once
+the game acknowledges the pause. Third person and diorama share a guide; first person has its
+own guide, shown when you first use that mode. Select **Continue racing** to resume.
+The illustrated controllers have button callouts and follow tracked hand movement within the
+panel; they are native drawings, not BigWalk's Unity controller models. Sessions that cannot
+pause do not display a blocking guide. In VR options, change **Default camera** or choose
+**Show control tutorials again** to replay both guides.
+
+Progress is saved in `[vr]`: `welcome_complete`, `default_camera` (0 original, 1 cockpit,
+2 diorama), and `tutorial_completed` (bit 1 external cameras, bit 2 cockpit). Missing settings
+start the introduction, including when upgrading an existing installation.
 
 With `hud_virtual_screen = true`, the complete race HUD, including the circuit minimap and item
 roulette, follows the left controller as a 30 cm panel in the original and diorama cameras. In the
@@ -62,8 +77,8 @@ first-person cockpit it is anchored in front of the seat, independently of contr
 head turns. If tracking or focus is lost, the HUD returns to the normal virtual screen. Menus retain
 their existing presentation.
 
-The first-person view is placed at Player 1's authored head bone and hides only that driver's model.
-If a vehicle does not expose the expected head bone, its driver-seat parameters provide the
+The first-person view uses Player 1's evaluated seated eye position and hides only that driver's model.
+If eye geometry cannot be evaluated, authored head/driver-seat parameters provide the
 fallback. Position follows the kart simulation exactly, while impact rotations are held and blended
 back for comfort. The diorama uses a much larger world scale and follows the kart's centre and
 driving direction. The game's own transforms are not modified; Aurora composes the VR view and eye
@@ -126,8 +141,55 @@ session is focused; the normal keyboard/gamepad path resumes when VR input is un
 differences, and a stale XR snapshot expires after 250 ms. F10 suppresses gameplay input until held
 controls are released after the panel closes.
 
-The game continues to display GameCube prompts. Haptics and user-editable remapping of these fixed
-VR bindings are not implemented yet.
+The game continues to display GameCube prompts. The Driving tab can swap item/trick between Y/X
+and cockpit drift/brake between A/B. X+Y always opens settings, menu navigation remains A/B, and
+the left trigger always brakes/reverses. Optional short haptic pulses indicate grabbing/releasing.
+These additions belong to the development build after v0.6.1.
+
+## Development settings after v0.6.1
+
+Under SteamVR, X still triggers tricks immediately. Holding X for 0.65 seconds sends
+one Mario Kart pause press; release X before pausing/resuming again. The initial press
+can still perform a trick before the hold opens pause. X+Y continues to open VR settings
+and cancels the long-X pause. The system Menu button is left to SteamVR so it no longer
+also pauses Mario Kart. Other OpenXR runtimes retain their existing Menu binding.
+
+- **Driving:** kart and bike rotation for full steering, acquisition depth, grab assistance,
+  steering response and tracking-loss tolerance. Defaults remain 90 degrees for karts and 45
+  for bikes. Changes apply immediately. The left stick retains forward/back item aiming while
+  the wheel controls left/right steering. Grip ownership survives brief missing vehicle data;
+  it does not transfer to a different vehicle.
+  Kart wheels can rotate beyond full steering and through complete turns. The game input
+  saturates at the configured steering angle, but extra hand rotation is retained so
+  retracing the gesture returns to the same centre. Handlebars keep limited visual travel
+  with the same centre preservation. When two held hands are too close to define an angle,
+  steering holds steady until they separate; releasing both grips recentres the control.
+  The kart wheel and its grab reference use the stabilised cockpit frame during body
+  spins and airborne tricks. Only the wheel vertices are compensated; the chassis keeps
+  its original animation. Physical wheel rotation remains independent of that compensation.
+  Multi-joint kart draws are supported when every modified wheel position uses the local
+  body matrix. Other joints and opponents sharing the asset retain their original vertices;
+  ambiguous ownership falls back to the original draw instead of deforming another part.
+- **Graphics:** preferred refresh rate on the next launch, applied only if the runtime exposes
+  it. Runtime default is respected when no preference is set. The existing resolution selector
+  still requires restarting. Experimental adaptive resolution is off by default: it renders
+  races at 70–100% of the configured eye dimensions and upscales to the unchanged XR swapchain.
+  It reacts slowly to new-image rate; it is not a GPU-time measurement or a fix for CPU limits.
+- **Display:** forward HUD width/distance apply immediately. First-person HUD remains anchored
+  in front of the seat. Camera trim is separate from world scale; Reset seat position restores
+  the neutral adjustments.
+- **Diagnostics:** display FPS, new-image FPS, runtime frequency, eye dimensions, p95/p99
+  presentation intervals, native grip/mesh preparation and last-frame replacement draw matches.
+  Zero mesh matches can also mean the wheel is outside the view. Export writes
+  `VR-diagnostics.txt` beside `Config.toml`, without a ROM or personal paths.
+
+Configuration writes use a temporary file and replacement; a failed save preserves the old file.
+Existing saved choices, including disabled native steering, remain respected.
+
+Recognized controller profiles are not a list of physically validated devices. Quest-style PC VR
+has been exercised during development; no exhaustive headset/vehicle compatibility matrix is
+claimed. Automated tests cover input/math and synthetic stereo GPU occlusion. Real race tests are
+still required for every supported vehicle, lightning/camera transition, and headset/runtime pair.
 
 ## First-person camera tuning
 
@@ -150,6 +212,10 @@ the configuration file.
 - Dedicated Quest, Android, and Apple visionOS packaging is not implemented.
 - Scene-specific comfort options, culling fixes, replay/spectator classification, and advanced VR
   remapping are future work.
+- Full per-eye EFB post-processing is not implemented. Effects which sample the mono EFB remain
+  excluded from immersive replay rather than being blindly re-enabled.
+- Native kart wheel extraction remains geometric; unusual meshes and normal deformation require
+  additional model-specific work. Preparation failure uses the procedural control.
 - The desktop window remains available as a mirror and fallback.
 
 OpenXR diagnostics are written to the normal run log under

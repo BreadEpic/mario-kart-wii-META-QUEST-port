@@ -23,3 +23,12 @@ dotnet publish WheelWizard/WheelWizard.csproj -c Release -r win-x64 --self-conta
 
 Wheel Wizard is licensed under GPL-3.0. Its unmodified license is included in the
 portable archive.
+
+`Launcher/Build-Portable.ps1` now performs the pinned checkout, patch validation, self-contained
+launcher build, ROM-free bundle checks and manifest/checksum generation. Use a clean tagged Git
+checkout for releases; `-AllowDirty` is reserved for local development builds. The package workflow
+publishes only the portable archive and checksum when a tag is pushed.
+
+The patched Update action opens the portable VR updater. It updates managed launcher/setup files;
+run the new setup to compile the game runtime from your own disc. It does not replace the local VR
+launcher with Wheel Wizard's upstream non-VR binary.

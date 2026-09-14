@@ -19,6 +19,8 @@
 #include <vector>
 #include <toml.hpp>
 #include "platform/host_platform.h"
+#include "platform/atomic_file.h"
+#include "vr/steering_wheel.h"
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -31,6 +33,14 @@
 #endif
 
 struct RuntimeUserConfig {
+    bool vrWelcomeComplete=false;
+    unsigned vrTutorialCompleted=0;
+    int vrDefaultCamera=0;
+    mkw::vr::WheelTuning vrWheelTuning{};
+    float vrRefreshHz=0;
+    bool vrAdaptiveResolution=false;
+    int vrMenuShaderQuality=3;
+    bool vrSwapItemTrick=false, vrSwapCockpitDriftBrake=false;
     std::optional<bool> widescreen;
     std::optional<int32_t> windowPosX;
     std::optional<int32_t> windowPosY;
@@ -533,6 +543,25 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.vrSkipCopyClears = FindConfigValue<bool>(document, "vr", "skip_copy_clears");
     config.vrFirstPerson = FindConfigValue<bool>(document, "vr", "first_person");
     config.vrNativeSteeringWheel = FindConfigValue<bool>(document, "vr", "native_steering_wheel");
+    config.vrWelcomeComplete=FindConfigValue<bool>(document,"vr","welcome_complete").value_or(false);
+    config.vrDefaultCamera=std::clamp(FindConfigValue<int>(document,"vr","default_camera").value_or(0),0,2);
+    config.vrTutorialCompleted=FindConfigValue<unsigned>(document,"vr","tutorial_completed").value_or(0)&3u;
+    const auto tuning = [&](const char* key, float fallback, float low, float high) {
+        auto value = FindConfigFloat(document, "vr", key);
+        return value && std::isfinite(*value) ? std::clamp(*value, low, high) : fallback;
+    };
+    config.vrRefreshHz = tuning("refresh_hz", 0, 0, 144);
+    config.vrAdaptiveResolution=FindConfigValue<bool>(document,"vr","adaptive_resolution").value_or(false);
+    config.vrMenuShaderQuality=std::clamp(FindConfigValue<int>(document,"vr","menu_shader_quality").value_or(3),0,3);
+    config.vrSwapItemTrick=FindConfigValue<bool>(document,"vr","swap_item_trick").value_or(false);
+    config.vrSwapCockpitDriftBrake=FindConfigValue<bool>(document,"vr","swap_cockpit_drift_brake").value_or(false);
+    config.vrWheelTuning.kartDegrees = tuning("wheel_kart_degrees", 90, 20, 180);
+    config.vrWheelTuning.bikeDegrees = tuning("wheel_bike_degrees", 45, 20, 180);
+    config.vrWheelTuning.grabDistance = tuning("wheel_grab_distance", 0.35f, 0.15f, 0.8f);
+    config.vrWheelTuning.grabAssist = tuning("wheel_grab_assist", 1, 0.7f, 2);
+    config.vrWheelTuning.response = tuning("wheel_response", 1, 0.5f, 2);
+    config.vrWheelTuning.trackingGrace = tuning("wheel_tracking_grace", 0.2f, 0.05f, 0.5f);
+    config.vrWheelTuning.haptics = FindConfigValue<bool>(document, "vr", "wheel_haptics").value_or(true);
     if (auto value = FindConfigFloat(document, "vr", "first_person_units_per_meter");
         value && *value >= 1.0f && *value <= 10000.0f) {
         config.vrFirstPersonUnitsPerMeter = *value;
@@ -626,9 +655,11 @@ inline const std::optional<std::string>& ControllerButton(size_t index) {
 
 // Update one TOML value without discarding comments, unrelated settings, or
 // user-specific paths. This is used by the in-game F10 settings bar.
-inline bool WriteSetting(std::string_view section, std::string_view key, std::string_view value) {
-    const auto path = ResolveConfigPath();
+inline bool WriteSettingAtPath(const std::filesystem::path& path, std::string_view section, std::string_view key, std::string_view value) {
+    static std::mutex writeMutex;
+    std::lock_guard lock(writeMutex);
     std::ifstream input(path);
+    if (std::filesystem::exists(path) && !input) return false;
     std::vector<std::string> lines;
     std::string line;
     while (std::getline(input, line)) {
@@ -637,6 +668,10 @@ inline bool WriteSetting(std::string_view section, std::string_view key, std::st
         }
         lines.push_back(std::move(line));
     }
+    if (input.bad()) return false;
+    // Windows streams do not share delete access. Release the reader before
+    // AtomicWriteText replaces this file, including when adding a new key.
+    if (input.is_open()) input.close();
 
     const std::string normalizedSection = Trim(section);
     const std::string normalizedKey = Trim(key);
@@ -692,15 +727,17 @@ inline bool WriteSetting(std::string_view section, std::string_view key, std::st
     if (path.has_parent_path()) {
         std::filesystem::create_directories(path.parent_path(), ec);
     }
-    std::ofstream output(path, std::ios::trunc);
-    if (!output) {
-        std::cerr << "[runtime-config] Unable to write " << PathToUtf8(path) << std::endl;
-        return false;
-    }
+    std::ostringstream output;
     for (const auto& outputLine : lines) {
         output << outputLine << '\n';
     }
-    return static_cast<bool>(output);
+    const bool saved = mkw::platform::AtomicWriteText(path, output.str());
+    if (!saved) std::cerr << "[runtime-config] Unable to save " << PathToUtf8(path) << std::endl;
+    return saved;
+}
+
+inline bool WriteSetting(std::string_view section, std::string_view key, std::string_view value) {
+    return WriteSettingAtPath(ResolveConfigPath(), section, key, value);
 }
 
 inline std::string FormatString(std::string_view value) {
@@ -832,6 +869,45 @@ inline bool SetVrFirstPerson(bool value) {
 inline bool SetVrNativeSteeringWheel(bool value) {
     Mutable().vrNativeSteeringWheel = value;
     return WriteSetting("vr", "native_steering_wheel", value ? "true" : "false");
+}
+
+inline std::mutex& VrTuningMutex() { static std::mutex mutex;return mutex; }
+inline mkw::vr::WheelTuning VrWheelTuning() {
+    std::lock_guard lock(VrTuningMutex());return Get().vrWheelTuning;
+}
+inline bool SetVrWheelTuning(mkw::vr::WheelTuning value) {
+    { std::lock_guard lock(VrTuningMutex());Mutable().vrWheelTuning = value; }
+    bool ok = true;
+    ok &= WriteSetting("vr", "wheel_kart_degrees", std::to_string(value.kartDegrees));
+    ok &= WriteSetting("vr", "wheel_bike_degrees", std::to_string(value.bikeDegrees));
+    ok &= WriteSetting("vr", "wheel_grab_distance", std::to_string(value.grabDistance));
+    ok &= WriteSetting("vr", "wheel_grab_assist", std::to_string(value.grabAssist));
+    ok &= WriteSetting("vr", "wheel_response", std::to_string(value.response));
+    ok &= WriteSetting("vr", "wheel_tracking_grace", std::to_string(value.trackingGrace));
+    ok &= WriteSetting("vr", "wheel_haptics", value.haptics ? "true" : "false");
+    return ok;
+}
+inline bool SetVrRefreshHz(float hz) {
+    Mutable().vrRefreshHz = hz;
+    return WriteSetting("vr", "refresh_hz", std::to_string(hz));
+}
+inline bool SetVrAdaptiveResolution(bool enabled) {
+    Mutable().vrAdaptiveResolution=enabled;
+    return WriteSetting("vr","adaptive_resolution",enabled?"true":"false");
+}
+inline bool SetVrHudDistanceMeters(float value) {
+    Mutable().vrHudDistanceMeters=std::clamp(value,.5f,5.0f);
+    return WriteSetting("vr","hud_distance_meters",std::to_string(*Mutable().vrHudDistanceMeters));
+}
+inline bool SetVrHudWidthMeters(float value) {
+    Mutable().vrHudWidthMeters=std::clamp(value,.5f,4.0f);
+    return WriteSetting("vr","hud_width_meters",std::to_string(*Mutable().vrHudWidthMeters));
+}
+inline bool SetVrButtonMapping(bool swapItem, bool swapDrift) {
+    Mutable().vrSwapItemTrick=swapItem;
+    Mutable().vrSwapCockpitDriftBrake=swapDrift;
+    const bool a=WriteSetting("vr","swap_item_trick",swapItem?"true":"false");
+    return WriteSetting("vr","swap_cockpit_drift_brake",swapDrift?"true":"false") && a;
 }
 
 inline bool VrNativeSteeringWheel() {

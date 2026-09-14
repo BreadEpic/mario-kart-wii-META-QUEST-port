@@ -1862,7 +1862,7 @@ static u32 calculate_last_vtx_size(GXVtxFmt fmt) {
 
 static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Range vertRange,
                                  uint16_t usedPnMtxMask, HashType matrixTopologySignature, HashType geometrySignature,
-                                 bool interpolationIdentityActive);
+                                 bool interpolationIdentityActive, const uint8_t* vertices, uint32_t vertexStride);
 
 // The per-draw geometry signature, matrix-usage mask and draw-identity hashes exist purely to feed frame interpolation
 // (build_uniform consumes them only after its `frame_interpolation_fps() == 0` early-out).
@@ -2156,7 +2156,7 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
   const PnMtxUsage matrixUsage = interpolationIdentityActive ? pn_mtx_usage(vertices, vtxCount, vtxSize) : PnMtxUsage{};
   handle_draw_unmerged(prim, fmt, vtxCount, vertRange, matrixUsage.mask, matrixUsage.topologySignature,
                        interpolationIdentityActive ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize) : 0,
-                       interpolationIdentityActive);
+                       interpolationIdentityActive, vertices, vtxSize);
   return true;
 }
 
@@ -2190,7 +2190,7 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
   pos += totalVtxBytes;
 
   // Try to merge with previous draw call
-  if (!g_gxState.stateDirty)
+  if (!g_gxState.stateDirty && !native_wheel_source(g_gxState.arrays[GX_VA_POS].data))
     LIKELY {
       auto* lastDraw = gfx::get_last_draw_command<DrawData>();
       // Only if the previous draw call was a single instance draw (no lines/points handling)
@@ -2224,13 +2224,13 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
   const PnMtxUsage matrixUsage = interpolationIdentityActive ? pn_mtx_usage(vertices, vtxCount, vtxSize) : PnMtxUsage{};
   handle_draw_unmerged(prim, fmt, vtxCount, vertRange, matrixUsage.mask, matrixUsage.topologySignature,
                        interpolationIdentityActive ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize) : 0,
-                       interpolationIdentityActive);
+                       interpolationIdentityActive, vertices, vtxSize);
   return true;
 }
 
 static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, gfx::Range vertRange,
                                  uint16_t usedPnMtxMask, HashType matrixTopologySignature, HashType geometrySignature,
-                                 bool interpolationIdentityActive) {
+                                 bool interpolationIdentityActive, const uint8_t* vertices, uint32_t vertexStride) {
   ZoneScoped;
   // GX_CULL_ALL rasterizes nothing on hardware - no color, no depth.
   if (g_gxState.cullMode == GX_CULL_ALL && prim != GX_LINES && prim != GX_LINESTRIP && prim != GX_POINTS)
@@ -2253,7 +2253,8 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, g
       continue;
     }
     auto& array = g_gxState.arrays[i];
-    auto* nativeWheel = i==GX_VA_POS ? native_wheel_array(array) : nullptr;
+    auto* nativeWheel = i==GX_VA_POS ? native_wheel_array(array,vertices,uint32_t(vtxCount)*vertexStride,
+        vertexStride,matrix_index_prefix_size(fmt)) : nullptr;
     if (nativeWheel) {
       static unsigned nativeWheelDrawLogs=0;
       if(nativeWheelDrawLogs++<4) Log.info("Native steering wheel: animated local vehicle vertex array");

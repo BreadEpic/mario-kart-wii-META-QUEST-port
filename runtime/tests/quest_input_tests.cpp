@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "vr/quest_input.h"
+#include "vr/game_menu_pointer.h"
 #include <chrono>
 #include <iostream>
 #include <thread>
@@ -10,6 +11,26 @@ void Check(bool condition, const char* message) {
     if (!condition) { ++failures; std::cerr << "FAILED: " << message << '\n'; }
 }
 int main() {
+    {
+        GameMenuPointer pointer;
+        QuestInput q{};q.active=true;q.ui_pointer.valid=true;q.ui_pointer.forward={0,0,-1};
+        auto hit=pointer.Update(q,true,2,1,2);
+        Check(hit.valid && !hit.down && hit.x==0 && hit.y==0,"menu ray points at native screen centre");
+        q.accelerate=1;
+        Check(pointer.Update(q,true,2,1,2).down,"right trigger validates pointer target");
+        q.ui_pointer.valid=false;q.ui_left_pointer.valid=true;q.ui_left_pointer.forward={0,0,-1};q.reverse=true;
+        Check(!pointer.Update(q,true,2,1,2).valid,"tracking loss does not transfer held click to other hand");
+        q.accelerate=0;q.reverse=false;pointer.Update(q,true,2,1,2);pointer.Update(q,true,2,1,2);
+        q.reverse=true;q.ui_left_pointer.position={.5f,.25f,0};
+        hit=pointer.Update(q,true,2,1,2);
+        Check(hit.valid && hit.down && hit.x==.5f && hit.y==-.5f,"left trigger and native pointer axes");
+        pointer.Update(q,false,2,1,2);
+        Check(!pointer.Update(q,true,2,1,2).down,"closing settings while holding trigger cannot click game");
+        q.reverse=false;pointer.Update(q,true,2,1,2);q.reverse=true;
+        Check(pointer.Update(q,true,2,1,2).down,"fresh trigger works after leaving settings");
+        q.ui_left_pointer.position={3,0,0};
+        Check(!pointer.Update(q,true,2,1,2).valid,"ray outside screen cannot select menu buttons");
+    }
     QuestInput input{};
     Check(MapQuestInput(input).err == PAD_ERR_NO_CONTROLLER, "inactive controllers stay disconnected");
     input.active = true;
@@ -49,6 +70,11 @@ int main() {
     Check(MapQuestInput(input, calibrated).stickX == 5, "wheel bypasses stick drift calibration and deadzone");
     input.wheel_steering = -1;
     Check(MapQuestInput(input).stickX == -100, "wheel reaches full left lock");
+    input.steering_y = -1;
+    Check(MapQuestInput(input).stickY == -100, "wheel preserves backward item aim");
+    input.steering_y = 1;
+    Check(MapQuestInput(input).stickY == 100, "wheel preserves forward item aim");
+    input.steering_y = 0;
     input.wheel_active = false;
     pad = MapQuestInput(input);
     Check(pad.button == (PAD_BUTTON_A | PAD_TRIGGER_L | PAD_TRIGGER_R), "accelerate, item and drift work together");
@@ -129,5 +155,38 @@ int main() {
         PublishQuestInput({});
     }
     if (!failures) std::cout << "Quest input checks passed\n";
+    input={}; input.active=true; input.trick=true;
+    Check(MapQuestInput(input,{}, {true,false}).button==PAD_TRIGGER_L,"remapped X uses item");
+    input.item=1;
+    Check(MapQuestInput(input,{}, {true,true}).button==0,"menu chord remains available after remapping");
+    input={}; input.active=true; input.cockpit_controls=true;input.brake=true;
+    Check(MapQuestInput(input,{}, {false,true}).button==PAD_TRIGGER_R,"remapped B drifts in cockpit");
+    input.reverse=true; input.accelerate=1;
+    Check(MapQuestInput(input,{}, {true,true}).button==PAD_BUTTON_B,"reverse overrides remapped drift and throttle");
+    SteamVrTrickPause steam;
+    auto gesture=steam.Update(true,true,false,1000000000);
+    Check(gesture.trick&&!gesture.pause,"SteamVR X tricks immediately without pausing");
+    gesture=steam.Update(true,true,false,1640000000);
+    Check(gesture.trick&&!gesture.pause,"short X cannot pause");
+    gesture=steam.Update(true,true,false,1650000000);
+    Check(!gesture.trick&&gesture.pause,"holding X deliberately pauses after 650 ms");
+    Check(!steam.Update(true,true,false,2000000000).pause,"holding X produces only one pause pulse");
+    steam.Update(true,false,false,2100000000);
+    gesture=steam.Update(true,true,true,2200000000);
+    Check(gesture.trick&&!gesture.pause,"X plus Y remains available to VR settings");
+    Check(!steam.Update(true,true,false,3200000000).pause,"releasing Y from settings chord cannot pause Mario Kart");
+    steam.Update(false,false,false,3300000000);
+    Check(!steam.Update(true,true,false,4300000000).pause,"SteamVR focus recovery cannot pause from a stale held X");
+    steam.Update(true,false,false,4400000000);
+    Check(steam.Update(true,true,false,4500000000).trick,"fresh X works after dashboard focus recovery");
+    PublishQuestInput({});
+    input={};input.active=true;input.accelerate=1;
+    PublishQuestInput(input);
+    RequestQuestPausePulse();
+    Check(ReadQuestPad(result,true)&&result.button==PAD_BUTTON_START,"tutorial pause bypasses blocked gameplay without throttle");
+    Check(ReadQuestPad(result,true)&&result.button==0,"tutorial pause is consumed exactly once");
+    RequestQuestPausePulse();PublishQuestInput({});
+    input={};input.active=true;PublishQuestInput(input);
+    Check(ReadQuestPad(result,false)&&!(result.button&PAD_BUTTON_START),"focus loss discards pending tutorial pause");
     return failures ? 1 : 0;
 }

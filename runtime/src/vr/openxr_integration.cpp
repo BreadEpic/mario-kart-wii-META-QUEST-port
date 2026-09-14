@@ -13,6 +13,8 @@
 #include "vr/steering_wheel.h"
 #include "vr/submission_wait.h"
 #include "vr/frame_delivery.h"
+#include "vr/frame_statistics.h"
+#include "vr/adaptive_resolution.h"
 #include "vr/mkw_vr_policy.h"
 #include "vr/mkw_vr_instrumentation.h"
 
@@ -41,8 +43,11 @@
 
 namespace mkw::vr {
 namespace {
+std::mutex diagnosticsMutex;
+OpenXRDiagnostics diagnostics;
 
 void ConfigurePolicy(bool enabled) noexcept {
+    SetQuestButtonMapping({RuntimeConfigFile::Get().vrSwapItemTrick,RuntimeConfigFile::Get().vrSwapCockpitDriftBrake});
     MkwVRPolicyReset();
     MkwVRPolicyConfig config{};
     config.enabled = enabled;
@@ -50,7 +55,7 @@ void ConfigurePolicy(bool enabled) noexcept {
     config.world_units_per_meter = RuntimeConfigFile::VrWorldUnitsPerMeter(500.0f);
     config.hud_distance_meters = RuntimeConfigFile::VrHudDistanceMeters(2.0f);
     config.hud_width_meters = RuntimeConfigFile::VrHudWidthMeters(2.4f);
-    config.first_person_units_per_meter = RuntimeConfigFile::VrFirstPersonUnitsPerMeter(10.0f);
+    config.first_person_units_per_meter = RuntimeConfigFile::VrFirstPersonUnitsPerMeter(100.0f);
     MkwVRPolicyConfigure(config);
     MkwVRInstrumentationInitialize();
     MkwVRFirstPersonApplyConfiguredSettings();
@@ -475,6 +480,8 @@ private:
             return false;
         };
 
+        FrameStatistics displayIntervals;
+        auto previousDisplay=Clock::now();
         while (!stop_.load(std::memory_order_acquire) && !fatal) {
             const auto events = runtime_->PollEvents();
             const bool active = runtime_->IsSessionRunning();
@@ -490,7 +497,8 @@ private:
                 applied_session_run_serial_ = session;
                 ResetTrackingOrigin();
                 invalidate();
-                runtime_->RequestDisplayRefreshRate(90.0f);
+                if (RuntimeConfigFile::Get().vrRefreshHz > 0)
+                    runtime_->RequestDisplayRefreshRate(RuntimeConfigFile::Get().vrRefreshHz);
             }
             if (!active) {
                 invalidate();
@@ -504,6 +512,7 @@ private:
                 ? OpenXRD3D12FrameMode::ImmersiveProjection : OpenXRD3D12FrameMode::VirtualScreen;
             presentation.quad_distance_meters = policy.config.hud_distance_meters;
             presentation.quad_width_meters = policy.config.hud_width_meters;
+            presentation.anchored = runtime_->PanelAnchored();
             OpenXRD3D12Frame display{};
             const auto begin = backend_->BeginDisplayFrame(presentation, display);
             if (begin == OpenXRD3D12BeginStatus::SessionNotRunning) continue;
@@ -521,8 +530,11 @@ private:
             const bool immersive = policy.presentation == VRPresentationMode::ImmersiveRace;
             display.presentation.mode = immersive ? OpenXRD3D12FrameMode::ImmersiveProjection
                                                    : OpenXRD3D12FrameMode::VirtualScreen;
+            ApplyPendingReferenceSpaceChange(display.xr_frame);
             runtime_->PollControllers(display.xr_frame.predicted_display_time);
+            display.presentation.anchored=runtime_->PanelAnchored();
             if (runtime_->ConsumeCameraClick() && immersive) MkwVRCycleCamera();
+            UpdateDrivingFrame(display, immersive, policy.EffectiveUnitsPerMeter());
             if (!delivery.PendingToken() && display.xr_frame.should_render && display.xr_frame.views_valid) {
                 if (!backend_->BeginSubmission(display)) {
                     SetError(backend_->LastError());
@@ -543,13 +555,25 @@ private:
                 fatal = true;
             }
             ++ticks;
+            const auto nowDisplay=Clock::now();
+            displayIntervals.Add(std::chrono::duration<float,std::milli>(nowDisplay-previousDisplay).count());
+            previousDisplay=nowDisplay;
             displays += show ? 1 : 0;
             period_ns += static_cast<double>(display.xr_frame.predicted_display_period);
             const double seconds = std::chrono::duration<double>(Clock::now() - stats_start).count();
             if (seconds >= 5.0) {
+                adaptive_resolution_.Observe(float(images/seconds),float(period_ns>0?1.0e9*ticks/period_ns:0),
+                    RuntimeConfigFile::Get().vrAdaptiveResolution && immersive);
+                {
+                    std::lock_guard lock(diagnosticsMutex);
+                    diagnostics={float(displays/seconds),float(images/seconds),float(period_ns>0?1.0e9*ticks/period_ns:0),
+                        displayIntervals.Percentile(.95f),displayIntervals.Percentile(.99f),display.render_width[0],display.render_height[0],cancellations,adaptive_resolution_.Scale()};
+                }
                 RT_LOG(RT_TAG_RUNTIME) << "[mkw-vr] async timing: display-fps=" << displays / seconds
                     << ", new-image-fps=" << images / seconds
                     << ", runtime-hz=" << (period_ns > 0 ? 1.0e9 * ticks / period_ns : 0.0)
+                    << ", interval-p95-ms=" << displayIntervals.Percentile(.95f)
+                    << ", interval-p99-ms=" << displayIntervals.Percentile(.99f)
                     << ", canceled=" << cancellations << std::endl;
                 stats_start = Clock::now();
                 displays = images = ticks = cancellations = 0;
@@ -637,6 +661,7 @@ private:
                                            : OpenXRD3D12FrameMode::VirtualScreen;
             presentation.quad_distance_meters = policy.config.hud_distance_meters;
             presentation.quad_width_meters = policy.config.hud_width_meters;
+            presentation.anchored = runtime_->PanelAnchored();
 
             OpenXRD3D12Frame frame{};
             const auto wait_start = std::chrono::steady_clock::now();
@@ -656,7 +681,9 @@ private:
                 break;
             }
 
+            ApplyPendingReferenceSpaceChange(frame.xr_frame);
             runtime_->PollControllers(frame.xr_frame.predicted_display_time);
+            frame.presentation.anchored=runtime_->PanelAnchored();
             if (runtime_->ConsumeCameraClick() && immersive) {
                 MkwVRCycleCamera();
             }
@@ -769,24 +796,15 @@ private:
         ShutdownOrRetainGraphicsObjects();
     }
 
-    void BuildPublishedFrame(const OpenXRD3D12Frame& source, bool immersive,
-                             float units_per_meter, uint64_t content_tag) noexcept {
+    void UpdateDrivingFrame(const OpenXRD3D12Frame& source, bool immersive,
+                            float units_per_meter) noexcept {
         ApplyPendingReferenceSpaceChange(source.xr_frame);
-        auto& destination = published_frame_.frame;
+        auto& destination = driving_frame_;
         destination = {};
-        destination.frameToken = source.xr_frame.serial;
-        destination.contentTag = content_tag;
-        destination.mode = immersive ? AURORA_STEREO_FRAME_IMMERSIVE_REPLAY
-                                      : AURORA_STEREO_FRAME_VIRTUAL_SCREEN;
-        for (uint32_t eye = 0; eye < kOpenXREyeCount; ++eye) {
-            destination.eyes[eye].width = source.render_width[eye];
-            destination.eyes[eye].height = source.render_height[eye];
-            IdentityEye(destination.eyes[eye]);
-        }
         if (!immersive) {
             last_immersive_ = false;
             wheel_.Update({}, false, 0);
-            runtime_->PublishDrivingInput(false, 0, false);
+            runtime_->PublishDrivingInput(false, 0, false, 0);
             return;
         }
 
@@ -794,6 +812,11 @@ private:
             (source.xr_frame.view_state_flags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
         if (!base_pose_valid_ || !last_immersive_) {
             base_pose_ = CenterPose(source.xr_frame, position_valid);
+            // Recentring establishes heading, never headset pitch or roll.
+            // Otherwise looking down at the tutorial tilts the whole track.
+            const auto forward=Rotate(base_pose_.orientation,{0.0f,0.0f,-1.0f});
+            const float yaw=std::atan2(-forward[0],-forward[2]);
+            base_pose_.orientation={0.0f,std::sin(yaw*0.5f),0.0f,std::cos(yaw*0.5f)};
             base_pose_valid_ = true;
             base_position_valid_ = position_valid;
         } else if (position_valid && !base_position_valid_) {
@@ -808,13 +831,24 @@ private:
                 << (loaded ? "Meta runtime mesh" : "controller glove fallback (Meta mesh unavailable)") << std::endl;
         }
         auto& cockpit = destination.cockpit;
+        const auto camera = MkwVRFirstPersonGetSnapshot();
+        driving_camera_mode_=camera.mode;
+        const auto& driverAnchor = camera.anchor;
+        if(camera.mode!=CameraMode::Game && driverAnchor.valid && driverAnchor.units_per_meter>0)
+            units_per_meter=driverAnchor.units_per_meter;
         cockpit.unitsPerMeter=units_per_meter;
-        const auto driverAnchor = MkwVRFirstPersonGetAnchor();
         cockpit.active = position_valid && base_position_valid_ && runtime_->IsSessionFocused() &&
-            MkwVRGetCameraMode() == CameraMode::FirstPerson && driverAnchor.valid;
-        cockpit.nativeWheel = cockpit.active && RuntimeConfigFile::VrNativeSteeringWheel() && driverAnchor.native_wheel.valid;
+            camera.mode == CameraMode::FirstPerson && driverAnchor.valid;
+        cockpit.nativeWheel = cockpit.active && RuntimeConfigFile::VrNativeSteeringWheel() &&
+            driverAnchor.native_wheel.valid && driverAnchor.native_mesh_prepared;
         cockpit.bike=driverAnchor.bike;
         WheelGeometry drivingGeometry=driverAnchor.native_wheel;
+        const auto time = source.xr_frame.predicted_display_time;
+        const float dt = last_wheel_time_ > 0 ? float(time - last_wheel_time_) * 1.0e-9f : 1.0f / 90.0f;
+        last_wheel_time_ = time;
+        cockpit.nativeWheel=wheel_reference_.Resolve(drivingGeometry,
+            cockpit.active && RuntimeConfigFile::VrNativeSteeringWheel(),cockpit.nativeWheel,
+            last_held_[0]||last_held_[1],cockpit.bike,driverAnchor.vehicle_identity,dt);
         if(cockpit.bike && !drivingGeometry.valid) {
             drivingGeometry.center={0,SteeringWheel::Height,SteeringWheel::Depth};
             drivingGeometry.right={1,0,0}; drivingGeometry.up={0,0,-1}; drivingGeometry.normal={0,1,0};
@@ -853,20 +887,73 @@ private:
             }
             hands[hand] = {position[0], position[1], position[2], target.squeeze, target.tracked};
         }
-        const auto time = source.xr_frame.predicted_display_time;
-        const float dt = last_wheel_time_ > 0 ? float(time - last_wheel_time_) * 1.0e-9f : 1.0f / 90.0f;
-        last_wheel_time_ = time;
         if (cockpit.nativeWheel || cockpit.bike)
             for (auto& hand : hands) hand = drivingGeometry.ToWheel(hand);
         const auto wheel = wheel_.Update(hands, cockpit.active, dt,
-            cockpit.nativeWheel || cockpit.bike ? drivingGeometry.radius : SteeringWheel::Radius,cockpit.bike);
-        cockpit.wheelAngle = wheel.angle;
+            cockpit.nativeWheel || cockpit.bike ? drivingGeometry.radius : SteeringWheel::Radius,cockpit.bike,
+            RuntimeConfigFile::VrWheelTuning());
+        // A kart rim follows full hand rotation; handlebars retain their
+        // limited visual travel, while the input accumulator keeps overtravel.
+        cockpit.wheelAngle = wheel.visualAngle;
+        for (size_t hand=0;hand<2;++hand)
+            if (wheel.held[hand]!=last_held_[hand] && cockpit.active && RuntimeConfigFile::VrWheelTuning().haptics)
+                runtime_->PulseGrip(hand,wheel.held[hand]);
+        last_held_=wheel.held;
         for (int hand = 0; hand < 2; ++hand) cockpit.hands[hand].held = wheel.held[hand];
-        runtime_->PublishDrivingInput(cockpit.active, wheel.steering, wheel.held[0] || wheel.held[1]);
+        runtime_->PublishDrivingInput(cockpit.active, wheel.steering, wheel.held[0] || wheel.held[1],cockpit.wheelAngle);
+    }
+
+    void BuildPublishedFrame(const OpenXRD3D12Frame& source, bool immersive,
+                             float units_per_meter, uint64_t content_tag) noexcept {
+        // The synchronous path also updates once per XR frame. The asynchronous
+        // path has already updated even when the renderer could not accept work.
+        if (last_wheel_time_ != source.xr_frame.predicted_display_time || !immersive)
+            UpdateDrivingFrame(source, immersive, units_per_meter);
+        auto& destination = published_frame_.frame;
+        destination = driving_frame_;
+        destination.frameToken = source.xr_frame.serial;
+        destination.contentTag = content_tag;
+        destination.renderScale=RuntimeConfigFile::Get().vrAdaptiveResolution?adaptive_resolution_.Scale():1.0f;
+        destination.mode = immersive ? AURORA_STEREO_FRAME_IMMERSIVE_REPLAY : AURORA_STEREO_FRAME_VIRTUAL_SCREEN;
+        for (uint32_t eye = 0; eye < kOpenXREyeCount; ++eye) {
+            destination.eyes[eye].width = source.render_width[eye];
+            destination.eyes[eye].height = source.render_height[eye];
+            IdentityEye(destination.eyes[eye]);
+        }
+        if (!immersive) {
+            destination.ui.anchored=source.presentation.anchored;
+            if(destination.ui.anchored) {
+                const auto anchor=runtime_->PanelOrigin();
+                const Pose panel{{anchor.orientation.x,anchor.orientation.y,anchor.orientation.z,anchor.orientation.w},
+                    {anchor.position.x,anchor.position.y,anchor.position.z}};
+                destination.ui.distance=source.presentation.quad_distance_meters;
+                destination.ui.width=source.presentation.quad_width_meters;
+                const auto input=ReadQuestInputSnapshot();
+                for(int hand=0;hand<2;++hand) {
+                    const auto& p=input.ui_hands[hand];destination.ui.tracked[hand]=p.valid;
+                    const auto& aim=hand?input.ui_pointer:input.ui_left_pointer;
+                    destination.ui.pointerTracked[hand]=aim.valid && input.active;
+                    for(int axis=0;axis<3;++axis) {
+                        destination.ui.pointerRay[hand][axis]=aim.position[axis];
+                        destination.ui.pointerRay[hand][axis+3]=aim.forward[axis];
+                    }
+                    auto* m=destination.ui.panelFromGrip[hand];
+                    for(int row=0;row<3;++row) { m[row*4]=p.right[row];m[row*4+1]=p.up[row];m[row*4+2]=-p.forward[row];m[row*4+3]=p.position[row]; }
+                }
+                for(int eye=0;eye<2;++eye) {
+                    ViewFromBase(source.xr_frame.views[eye].pose,panel,true,1,destination.ui.eyeFromPanel[eye]);
+                    ProjectionFromFov(source.xr_frame.views[eye].fov,destination.eyes[eye].projection);
+                }
+            }
+            return;
+        }
+        units_per_meter=destination.cockpit.unitsPerMeter;
+        const bool position_valid = (source.xr_frame.view_state_flags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0;
+        auto& cockpit = destination.cockpit;
         Pose hand_panel{};
         // In the cockpit, use the existing fixed forward HUD plane (including
         // items). It follows the seated frame, not head turns or controller loss.
-        destination.handHud = MkwVRGetCameraMode() != CameraMode::FirstPerson &&
+        destination.handHud = driving_camera_mode_ != CameraMode::FirstPerson &&
             position_valid && runtime_->LeftGripValid();
         if (destination.handHud) {
             const auto& grip = runtime_->LeftGripPose();
@@ -911,6 +998,7 @@ private:
 
     void ResetTrackingOrigin() noexcept {
         wheel_ = {};
+        wheel_reference_={};last_held_={};
         last_wheel_time_ = 0;
         base_pose_ = {};
         base_pose_valid_ = false;
@@ -946,6 +1034,8 @@ private:
     std::atomic_bool teardown_requested_{false};
     std::atomic<PublishedFrame*> published_{nullptr};
     PublishedFrame published_frame_{};
+    AuroraStereoFrame driving_frame_{};
+    CameraMode driving_camera_mode_=CameraMode::Game;
     std::mutex published_mutex_;
     std::mutex stop_mutex_;
     std::condition_variable stop_cv_;
@@ -953,6 +1043,9 @@ private:
     std::string last_error_;
     Pose base_pose_{};
     SteeringWheel wheel_;
+    WheelReferenceLatch wheel_reference_;
+    AdaptiveResolution adaptive_resolution_;
+    std::array<bool,2> last_held_{};
     XrTime last_wheel_time_ = 0;
     bool last_native_wheel_ = false;
     bool last_bike_ = false;
@@ -971,6 +1064,11 @@ private:
 #endif // defined(MKW_ENABLE_OPENXR) && defined(_WIN32)
 
 } // namespace
+
+OpenXRDiagnostics OpenXRGetDiagnostics() {
+    std::lock_guard lock(diagnosticsMutex);
+    return diagnostics;
+}
 
 OpenXRStartupResult OpenXRPrepareAurora(AuroraConfig& config) {
 #if !defined(MKW_ENABLE_OPENXR)

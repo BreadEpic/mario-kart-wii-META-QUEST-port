@@ -17,7 +17,7 @@ new file mode 100644
 index 0000000..ee4c4c3
 --- /dev/null
 +++ b/WheelWizard/Services/Launcher/LocalVrLauncher.cs
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,95 @@
 +using System.Diagnostics;
 +using WheelWizard.Models.Enums;
 +using WheelWizard.Mods;
@@ -44,7 +44,17 @@ index 0000000..ee4c4c3
 +
 +    public async Task<OperationResult> Install() => await RunSetup();
 +
-+    public async Task<OperationResult> Update() => await RunSetup();
++    public Task<OperationResult> Update()
++    {
++        var updater = Path.Combine(BundleRoot, "Update-VR.cmd");
++        if (!File.Exists(updater)) return RunSetup();
++        try
++        {
++            Process.Start(new ProcessStartInfo(updater) { UseShellExecute = true });
++            return Task.FromResult<OperationResult>(Ok());
++        }
++        catch (Exception exception) { return Task.FromResult<OperationResult>(Fail("VR update could not start: " + exception.Message)); }
++    }
 +
 +    public async Task<OperationResult> Launch()
 +    {

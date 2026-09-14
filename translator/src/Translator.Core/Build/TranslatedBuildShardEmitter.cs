@@ -505,9 +505,20 @@ public static partial class TranslatedBuildShardEmitter
         var traits = new Dictionary<uint, Trait>(baseTraits.Count + retroEntries.Count);
         foreach (var function in baseFunctions)
         {
+            var baseTrait = baseTraits[function.Address];
+            // Runtime native registrations always win dispatch, including REGISTER_NATIVE_FUNCTION_AS
+            // wrappers that intentionally keep the translated body available for an explicit call.
+            // The resolved Retro Rewind profile can be older than the native index, so do not let a
+            // stale translated profile entry re-introduce the original body as the indirect winner.
+            if (baseTrait.WinnerKind.Equals("native", StringComparison.OrdinalIgnoreCase))
+            {
+                traits[function.Address] = baseTrait;
+                continue;
+            }
+
             if (!retroEntries.TryGetValue(function.Address, out var resolved))
             {
-                traits[function.Address] = baseTraits[function.Address];
+                traits[function.Address] = baseTrait;
                 continue;
             }
             var translated = resolved.DirectCallAvailable &&

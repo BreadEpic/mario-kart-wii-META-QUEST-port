@@ -83,7 +83,7 @@ struct MkwVRPolicyConfig {
     // Wii is authored at roughly this many units per metre, so it is what
     // makes the race read life-size; the third-person default deliberately
     // does not, presenting the race as a small diorama instead.
-    float first_person_units_per_meter = 10.0f;
+    float first_person_units_per_meter = 100.0f;
 };
 
 struct MkwVRSceneObservation {
@@ -114,6 +114,7 @@ struct MkwVRPolicySnapshot {
     MkwVRCameraObservation camera{};
     uint32_t available_bindings = MkwVRBindingNone;
     bool session_active = false;
+    bool settings_visible = false;
     // A first-person camera is actually driving the view this frame. Set by the
     // integration layer once the anchor it publishes to the renderer is valid,
     // so the world scale can never disagree with where the camera is.

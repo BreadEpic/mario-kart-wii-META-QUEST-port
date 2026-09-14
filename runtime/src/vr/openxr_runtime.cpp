@@ -6,6 +6,7 @@
 #if defined(MKW_ENABLE_OPENXR)
 
 #include "vr/openxr_runtime.h"
+#include "vr/mkw_vr_policy.h"
 #include "vr/quest_input.h"
 
 #include <algorithm>
@@ -171,7 +172,7 @@ bool OpenXRRuntime::EnumerateInstanceCapabilities() {
 
 void OpenXRRuntime::RequestDisplayRefreshRate(float hz) {
     if (!HasSession() || !Contains(m_enabled_extensions, std::string(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME))) {
-        Log(OpenXRLogLevel::Info, "Display refresh is controlled by the PC VR runtime; select 90 Hz there");
+        Log(OpenXRLogLevel::Info, "Display refresh is controlled by the PC VR runtime; select the desired rate there");
         return;
     }
     PFN_xrEnumerateDisplayRefreshRatesFB enumerate = nullptr;
@@ -183,12 +184,12 @@ void OpenXRRuntime::RequestDisplayRefreshRate(float hz) {
     std::vector<float> rates(count);
     if (XR_FAILED(enumerate(m_session, count, &count, rates.data()))) return;
     if (std::find(rates.begin(), rates.end(), hz) == rates.end()) {
-        Log(OpenXRLogLevel::Info, "90 Hz is not exposed by the current runtime; retaining its refresh rate");
+        Log(OpenXRLogLevel::Info, "Requested refresh is not exposed by the current runtime; retaining its refresh rate");
         return;
     }
     const auto result = request(m_session, hz);
     Log(XR_SUCCEEDED(result) ? OpenXRLogLevel::Info : OpenXRLogLevel::Warning,
-        XR_SUCCEEDED(result) ? "Requested 90 Hz display refresh" : "The runtime rejected the 90 Hz refresh request");
+        XR_SUCCEEDED(result) ? "Requested display refresh: " + std::to_string(hz) + " Hz" : "The runtime rejected the refresh request");
 }
 
 bool OpenXRRuntime::CreateInstance() {
@@ -441,6 +442,12 @@ bool OpenXRRuntime::CreateControllerActions() {
     std::strcpy(action.actionName, "right_grip");
     std::strcpy(action.localizedActionName, "Right hand");
     if (XR_FAILED(xrCreateAction(m_controller_actions, &action, &m_right_grip_action))) return false;
+    action.actionType = XR_ACTION_TYPE_VIBRATION_OUTPUT;
+    for (size_t hand = 0; hand < 2; ++hand) {
+        std::strcpy(action.actionName, hand ? "wheel_haptic_right" : "wheel_haptic_left");
+        std::strcpy(action.localizedActionName, hand ? "Right wheel feedback" : "Left wheel feedback");
+        if (XR_FAILED(xrCreateAction(m_controller_actions, &action, &m_haptic_actions[hand]))) return false;
+    }
     action.actionType = XR_ACTION_TYPE_FLOAT_INPUT;
     for (size_t hand = 0; hand < 2; ++hand) {
         std::strcpy(action.actionName, hand ? "wheel_grab_right" : "wheel_grab_left");
@@ -450,6 +457,17 @@ bool OpenXRRuntime::CreateControllerActions() {
     std::strcpy(action.actionName, "cockpit_item");
     std::strcpy(action.localizedActionName, "Cockpit item trigger");
     if (XR_FAILED(xrCreateAction(m_controller_actions, &action, &m_item_trigger_action))) return false;
+    action.actionType=XR_ACTION_TYPE_BOOLEAN_INPUT;
+    std::strcpy(action.actionName,"steamvr_trick_pause_v1");
+    std::strcpy(action.localizedActionName,"Trick (tap X), Mario Kart pause (hold X)");
+    if(XR_FAILED(xrCreateAction(m_controller_actions,&action,&m_steam_trick_action))) return false;
+    action.actionType=XR_ACTION_TYPE_POSE_INPUT;
+    std::strcpy(action.actionName,"vr_ui_pointer");
+    std::strcpy(action.localizedActionName,"Point at VR interface");
+    if(XR_FAILED(xrCreateAction(m_controller_actions,&action,&m_ui_pointer_action))) return false;
+    std::strcpy(action.actionName,"vr_ui_left_pointer");
+    std::strcpy(action.localizedActionName,"Point at VR interface (left)");
+    if(XR_FAILED(xrCreateAction(m_controller_actions,&action,&m_ui_left_pointer_action))) return false;
     constexpr const char* names[kOpenXRControllerActionCount]{
         "steering", "tricks", "accelerate", "item", "drift", "drift_click",
         "confirm", "brake", "trick", "look_back", "pause", "reverse"};
@@ -484,6 +502,8 @@ bool OpenXRRuntime::CreateControllerActions() {
         };
 
         bind_path(m_camera_action, profile.camera_click);
+        bind_path(m_haptic_actions[0], "/user/hand/left/output/haptic");
+        bind_path(m_haptic_actions[1], "/user/hand/right/output/haptic");
         bind_path(m_grip_action, profile.left_grip_pose);
         bind_path(m_right_grip_action, "/user/hand/right/input/grip/pose");
         // Only analog squeeze profiles (Quest/PICO/Index) provide physical wheel input.
@@ -492,6 +512,9 @@ bool OpenXRRuntime::CreateControllerActions() {
             bind_path(m_squeeze_actions[1], "/user/hand/right/input/squeeze/value");
         }
         bind_path(m_item_trigger_action, profile.actions.item[0]);
+        bind_path(m_steam_trick_action, profile.actions.trick);
+        bind_path(m_ui_pointer_action,"/user/hand/right/input/aim/pose");
+        bind_path(m_ui_left_pointer_action,"/user/hand/left/input/aim/pose");
         const std::array<std::array<std::string_view, 2>, kOpenXRControllerActionCount> actions{{
             {profile.actions.steering, {}},
             {profile.actions.tricks, {}},
@@ -534,6 +557,10 @@ bool OpenXRRuntime::CreateControllerActions() {
     if (XR_FAILED(xrCreateActionSpace(m_session, &space, &m_grip_space))) return false;
     space.action = m_right_grip_action;
     if (XR_FAILED(xrCreateActionSpace(m_session, &space, &m_right_grip_space))) return false;
+    space.action=m_ui_pointer_action;
+    if(XR_FAILED(xrCreateActionSpace(m_session,&space,&m_ui_pointer_space))) return false;
+    space.action=m_ui_left_pointer_action;
+    if(XR_FAILED(xrCreateActionSpace(m_session,&space,&m_ui_left_pointer_space))) return false;
     XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
     attach.countActionSets = 1;
     attach.actionSets = &m_controller_actions;
@@ -541,6 +568,10 @@ bool OpenXRRuntime::CreateControllerActions() {
 }
 
 void OpenXRRuntime::DestroyControllerActions() {
+    if(m_ui_left_pointer_space!=XR_NULL_HANDLE) xrDestroySpace(m_ui_left_pointer_space);
+    m_ui_left_pointer_space=XR_NULL_HANDLE;m_ui_left_pointer_action=XR_NULL_HANDLE;
+    if(m_ui_pointer_space!=XR_NULL_HANDLE) xrDestroySpace(m_ui_pointer_space);
+    m_ui_pointer_space=XR_NULL_HANDLE;m_ui_pointer_action=XR_NULL_HANDLE;
     if (m_right_grip_space != XR_NULL_HANDLE) xrDestroySpace(m_right_grip_space);
     m_right_grip_space = XR_NULL_HANDLE;
     m_right_grip_action = m_item_trigger_action = XR_NULL_HANDLE;
@@ -554,9 +585,23 @@ void OpenXRRuntime::DestroyControllerActions() {
     m_controller_actions = XR_NULL_HANDLE;
     m_camera_action = m_grip_action = XR_NULL_HANDLE;
     m_game_actions.fill(XR_NULL_HANDLE);
+    m_haptic_actions.fill(XR_NULL_HANDLE);
     PublishQuestInput({});
     m_left_grip_valid = m_camera_clicked = false;
     m_camera_latch = {};
+    m_steam_trick_action=XR_NULL_HANDLE;
+    m_steam_trick_pause={};
+}
+
+void OpenXRRuntime::PulseGrip(size_t hand, bool grabbed) {
+    if (hand >= 2 || !IsSessionFocused() || m_haptic_actions[hand] == XR_NULL_HANDLE) return;
+    XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO};
+    info.action=m_haptic_actions[hand];
+    XrHapticVibration pulse{XR_TYPE_HAPTIC_VIBRATION};
+    pulse.duration=grabbed?25000000:15000000;
+    pulse.frequency=XR_FREQUENCY_UNSPECIFIED;
+    pulse.amplitude=grabbed?0.25f:0.12f;
+    xrApplyHapticFeedback(m_session, &info, reinterpret_cast<const XrHapticBaseHeader*>(&pulse));
 }
 
 void OpenXRRuntime::PollControllers(XrTime time) {
@@ -565,6 +610,7 @@ void OpenXRRuntime::PollControllers(XrTime time) {
     m_squeeze_values = {};
     m_raw_input = {};
     if (m_controller_actions == XR_NULL_HANDLE || !IsSessionFocused()) {
+        m_steam_trick_pause.Update(false,false,false,time);
         m_camera_latch.Update(false, false);
         PublishQuestInput({});
         return;
@@ -574,6 +620,7 @@ void OpenXRRuntime::PollControllers(XrTime time) {
     sync.countActiveActionSets = 1;
     sync.activeActionSets = &active;
     if (xrSyncActions(m_session, &sync) != XR_SUCCESS) {
+        m_steam_trick_pause.Update(false,false,false,time);
         m_camera_latch.Update(false, false);
         PublishQuestInput({});
         return;
@@ -637,12 +684,77 @@ void OpenXRRuntime::PollControllers(XrTime time) {
     input.look_back = look_back.currentState;
     input.pause = pause.currentState;
     input.reverse = reverse.currentState;
+    if(m_runtime_info.runtime_name.find("SteamVR")!=std::string::npos) {
+        get.action=m_steam_trick_action;
+        XrActionStateBoolean physicalX{XR_TYPE_ACTION_STATE_BOOLEAN};
+        const bool valid=XR_SUCCEEDED(xrGetActionStateBoolean(m_session,&get,&physicalX)) && physicalX.isActive;
+        const auto buttons=m_steam_trick_pause.Update(valid,physicalX.currentState,
+            QuestAxis(input.item)>0.5f,time);
+        input.trick=buttons.trick;
+        input.pause=buttons.pause;
+    }
+    input.steamvr=m_runtime_info.runtime_name.find("SteamVR")!=std::string::npos;
+    const auto panelPolicy=MkwVRPolicyGetSnapshot();
+    // Keep the same upright world-space screen throughout menu navigation.
+    // A transient missing race camera is not a menu and must not create an anchor.
+    const bool showPanel=panelPolicy.settings_visible ||
+        (panelPolicy.presentation==VRPresentationMode::VirtualScreen &&
+         panelPolicy.scene.mode!=VRSceneMode::Race);
+    if (!showPanel) { m_panel_anchored=false;m_panel_tracking_since=0; }
+    else if (!m_panel_anchored) {
+        XrSpaceLocation head{XR_TYPE_SPACE_LOCATION};
+        const auto flags=XR_SPACE_LOCATION_POSITION_VALID_BIT|XR_SPACE_LOCATION_ORIENTATION_VALID_BIT|
+            XR_SPACE_LOCATION_POSITION_TRACKED_BIT|XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+        if(XR_SUCCEEDED(xrLocateSpace(ViewSpace(),AppSpace(),time,&head)) && (head.locationFlags&flags)==flags) {
+            // Keep the menu upright and stationary where it was opened.
+            const auto& q=head.pose.orientation;
+            const auto forward=RotateUiVector(q.x,q.y,q.z,q.w,{0,0,-1});
+            const auto up=RotateUiVector(q.x,q.y,q.z,q.w,{0,1,0});
+            const float yaw=std::atan2(-forward[0],-forward[2]);
+            const bool ready=IsSessionFocused() && up[1]>.5f &&
+                forward[0]*forward[0]+forward[2]*forward[2]>.25f;
+            if(!ready) m_panel_tracking_since=0;
+            else {
+                if(!m_panel_tracking_since) m_panel_tracking_since=time;
+                if(time-m_panel_tracking_since>=400000000) {
+                    m_panel_origin=head.pose;
+                    m_panel_origin.orientation={0,std::sin(yaw*.5f),0,std::cos(yaw*.5f)};
+                    m_panel_anchored=true;
+                }
+            }
+        } else m_panel_tracking_since=0;
+    }
+    const auto uiPose=[&](XrSpace space) {
+        UiHandPose out;
+        XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
+        constexpr XrSpaceLocationFlags required=XR_SPACE_LOCATION_POSITION_VALID_BIT|XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+        if(space==XR_NULL_HANDLE || XR_FAILED(xrLocateSpace(space,m_panel_anchored?AppSpace():ViewSpace(),time,&location)) ||
+            (location.locationFlags&required)!=required) return out;
+        const auto& p=location.pose.position;const auto& q=location.pose.orientation;
+        out.position={p.x,p.y,p.z};
+        out.right=RotateUiVector(q.x,q.y,q.z,q.w,{1,0,0});
+        out.up=RotateUiVector(q.x,q.y,q.z,q.w,{0,1,0});
+        out.forward=RotateUiVector(q.x,q.y,q.z,q.w,{0,0,-1});out.valid=true;
+        if(m_panel_anchored) {
+            const auto& a=m_panel_origin;
+            const auto rotate=[&](std::array<float,3> v) { return RotateUiVector(-a.orientation.x,-a.orientation.y,-a.orientation.z,a.orientation.w,v); };
+            out.position=rotate({p.x-a.position.x,p.y-a.position.y,p.z-a.position.z});
+            out.right=rotate(out.right);out.up=rotate(out.up);out.forward=rotate(out.forward);
+        }
+        return out;
+    };
+    input.ui_pointer=uiPose(m_ui_pointer_space);
+    input.ui_left_pointer=uiPose(m_ui_left_pointer_space);
+    input.ui_hands={uiPose(m_grip_space),uiPose(m_right_grip_space)};
+    if(m_view_configuration[0].render_height)
+        input.ui_aspect=float(m_view_configuration[0].render_width)/m_view_configuration[0].render_height;
     m_raw_input = input;
     for (size_t hand = 0; hand < 2; ++hand) {
         get.action = m_squeeze_actions[hand];
         XrActionStateFloat squeeze{XR_TYPE_ACTION_STATE_FLOAT};
         if (XR_SUCCEEDED(xrGetActionStateFloat(m_session, &get, &squeeze)) && squeeze.isActive)
             m_squeeze_values[hand] = squeeze.currentState;
+        m_raw_input.ui_grips[hand] = m_squeeze_values[hand];
         get.action = hand ? m_right_grip_action : m_grip_action;
         XrActionStatePose pose{XR_TYPE_ACTION_STATE_POSE};
         if (XR_FAILED(xrGetActionStatePose(m_session, &get, &pose)) || !pose.isActive) continue;
@@ -658,17 +770,19 @@ void OpenXRRuntime::PollControllers(XrTime time) {
     XrActionStateFloat trigger{XR_TYPE_ACTION_STATE_FLOAT};
     m_item_trigger = XR_SUCCEEDED(xrGetActionStateFloat(m_session, &get, &trigger)) && trigger.isActive
         ? trigger.currentState : 0;
-    PublishDrivingInput(m_cockpit_input, m_wheel_steering, m_wheel_held);
+    PublishDrivingInput(m_cockpit_input, m_wheel_steering, m_wheel_held, m_wheel_angle);
 }
 
-void OpenXRRuntime::PublishDrivingInput(bool cockpit, float steering, bool held) {
+void OpenXRRuntime::PublishDrivingInput(bool cockpit, float steering, bool held, float angle) {
     m_cockpit_input = cockpit;
     m_wheel_held = cockpit && held; // SteeringWheel owns the bounded tracking-loss grace period.
     m_wheel_steering = steering;
+    m_wheel_angle = cockpit ? angle : 0;
     auto input = m_raw_input;
     input.cockpit_controls = cockpit;
     input.wheel_active = m_wheel_held;
     input.wheel_steering = steering;
+    input.wheel_angle = m_wheel_angle;
     if (cockpit) {
         input.item = m_item_trigger;
         input.drift = 0; // A is mapped to hop/drift by MapQuestInput. Grips only grab.
@@ -1048,6 +1162,7 @@ bool OpenXRRuntime::EndFrameWithoutLayers(const OpenXRFrame& frame) {
 }
 
 bool OpenXRRuntime::ResetAppSpace(const XrPosef& pose_in_reference_space) {
+    m_panel_anchored=false;
     ClearError();
     if (!HasSession()) {
         return Fail(XR_ERROR_CALL_ORDER_INVALID, "ResetAppSpace",
@@ -1090,6 +1205,7 @@ bool OpenXRRuntime::ConsumeAppSpaceChangesThrough(XrTime display_time) {
                       consumed = consumed || due;
                       return due;
                   });
+    if(consumed) { m_panel_anchored=false;m_panel_tracking_since=0; }
     return consumed;
 }
 

@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: package-${{ github.workflow }}-${{ github.ref }}
@@ -29,15 +29,43 @@ jobs:
 
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: |
+            8.0.x
+            10.0.x
 
       - name: Build installer
         shell: pwsh
         run: ./Launcher/Build-Installer.ps1
 
+      - name: Verify installer recovery
+        run: dotnet run --project Launcher/Installer.IO.Tests -c Release
+
+      - name: Verify portable updater recovery
+        run: ./Launcher/Test-VrUpdater.ps1
+
+      - name: Build complete portable distribution
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.0.0-development' }
+          ./Launcher/Build-Portable.ps1 -SetupExecutable (Resolve-Path Launcher/dist/WiiCompiled-Setup.exe) -Version $version
+
       - uses: actions/upload-artifact@v7
         with:
-          name: WiiCompiled-Setup-windows-x64
-          path: Launcher/dist/WiiCompiled-Setup.exe
+          name: WiiCompiled-VR-portable-windows-x64
+          path: |
+            Launcher/dist/WiiCompiled-VR-Portable-*.zip
+            Launcher/dist/WiiCompiled-VR-Portable-*.sha256
           if-no-files-found: error
-          archive: false
+
+      - name: Publish tagged portable release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:GITHUB_REF_NAME *> $null
+          if ($LASTEXITCODE -ne 0) { gh release create $env:GITHUB_REF_NAME --verify-tag --generate-notes }
+          if ($LASTEXITCODE -ne 0) { throw 'Release creation failed.' }
+          $assets = @(Get-ChildItem Launcher/dist/WiiCompiled-VR-Portable-*.zip,Launcher/dist/WiiCompiled-VR-Portable-*.sha256 | ForEach-Object FullName)
+          gh release upload $env:GITHUB_REF_NAME @assets
+          if ($LASTEXITCODE -ne 0) { throw 'Release asset upload failed.' }

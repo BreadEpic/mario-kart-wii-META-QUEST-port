@@ -25,6 +25,7 @@ inline constexpr Mtx34 kIdentityMtx34{
 // Thread-safe live switch: game -> first person -> far -> game.
 void MkwVRCycleCamera() noexcept;
 CameraMode MkwVRGetCameraMode() noexcept;
+bool MkwVRRaceIntroActive() noexcept;
 void MkwVRSetCameraMode(CameraMode mode) noexcept;
 
 // Where the driver's head sits in the kart's own frame, in metres. The kart
@@ -44,6 +45,8 @@ struct FirstPersonAnchor {
     float units_per_meter = 0.0f;
     WheelGeometry native_wheel{};
     bool bike=false;
+    bool native_mesh_prepared=false;
+    uint64_t vehicle_identity=0;
 };
 
 // ---------------------------------------------------------------------------
@@ -200,8 +203,10 @@ struct SeatedEyeReference {
         if(stable>=8) { value=sample;valid=true;stable=8; }
     }
 };
+struct FirstPersonCameraSnapshot { CameraMode mode=CameraMode::Game; FirstPersonAnchor anchor{}; };
+FirstPersonCameraSnapshot MkwVRFirstPersonGetSnapshot() noexcept;
 
-// Neutral authored hand targets, transformed by the visible kart body. Do not
+// Neutral authored hand targets, transformed by the stabilised cockpit body. Do not
 // use the animated hand IK targets: feeding their steering rotation back into
 // the controller angle would make the input chase its own animation.
 inline WheelGeometry ComputeNativeWheelGeometry(const Mtx34& seat_from_body,

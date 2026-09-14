@@ -11,6 +11,15 @@ or data of any kind - see the [README](README.md).
 
 ## Bundled in this repository
 
+### CircuitLord BigWalkVR controller tutorial reference
+
+The native onboarding callout placement is adapted from the controller-tooltip placement
+in BigWalkVR, distributed by [BigWalkVRInstaller](https://github.com/CircuitLord/BigWalkVRInstaller).
+Copyright (c) 2026 Jordan (CircuitLord). The repository's MIT license is retained in
+[`licenses/BigWalkVR-MIT.txt`](licenses/BigWalkVR-MIT.txt). The Unity plugin, its models and
+decompiled sources are not bundled; native C++ draws the controller guide and handles OpenXR
+pointing, Mario Kart's pause and tutorial persistence.
+
 ### aurora - MIT
 
 Copyright (c) 2022 Luke Street.

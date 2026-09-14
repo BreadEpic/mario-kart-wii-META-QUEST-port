@@ -21,13 +21,35 @@ struct WheelGeometry {
     }
 };
 struct WheelState {
-    float angle=0, steering=0;
+    float angle=0, steering=0, visualAngle=0;
     std::array<bool, 2> held{};
+};
+class WheelReferenceLatch {
+    WheelGeometry last_{};
+    uint64_t identity_=0;
+    float missing_=0;
+    bool bike_=false;
+public:
+    bool Resolve(WheelGeometry& geometry, bool enabled, bool available, bool held,
+                 bool bike, uint64_t identity, float dt) {
+        if(!enabled || identity_!=identity || bike_!=bike) { last_={};missing_=0; }
+        identity_=identity;bike_=bike;
+        if(!enabled) return false;
+        if(available && geometry.valid) { last_=geometry;missing_=0;return true; }
+        missing_+=std::clamp(dt,0.0f,0.05f);
+        if(held && last_.valid && missing_<0.20f) { geometry=last_;return true; }
+        last_={};return false;
+    }
+};
+struct WheelTuning {
+    float kartDegrees=90, bikeDegrees=45, grabDistance=0.35f, grabAssist=1, response=1, trackingGrace=0.20f;
+    bool haptics=true;
 };
 class SteeringWheel {
 public:
     static constexpr float Radius=0.18f, Height=-0.30f, Depth=-0.42f;
-    WheelState Update(const std::array<WheelHand, 2>& hands, bool active, float dt, float radius=Radius, bool handlebars=false) {
+    WheelState Update(const std::array<WheelHand, 2>& hands, bool active, float dt, float radius=Radius, bool handlebars=false,
+                      WheelTuning tuning={}) {
         const auto finite=[](float value) { uint32_t bits; std::memcpy(&bits,&value,sizeof(bits)); return (bits&0x7f800000u)!=0x7f800000u; };
         if (!finite(dt)) dt=0;
         if (!finite(radius) || radius<0.04f || radius>1.0f) { active=false; radius=Radius; }
@@ -35,15 +57,21 @@ public:
         const bool previouslyHeld=state_.held[0]||state_.held[1];
         float deltaSum=0,weightSum=0;
         std::array<bool,2> moving{};
+        std::array<bool,2> validHands{};
         std::array<float,2> delta{};
-        const float maxAngle=handlebars?0.785398163f:1.570796327f;
+        const float degrees=handlebars?tuning.bikeDegrees:tuning.kartDegrees;
+        const float maxAngle=(finite(degrees)?std::clamp(degrees,20.0f,180.0f):(handlebars?45.0f:90.0f))*0.01745329252f;
+        const float assist=finite(tuning.grabAssist)?std::clamp(tuning.grabAssist,0.7f,2.0f):1.0f;
+        const float reach=finite(tuning.grabDistance)?std::clamp(tuning.grabDistance,0.15f,0.8f):0.35f;
+        const float grace=finite(tuning.trackingGrace)?std::clamp(tuning.trackingGrace,0.05f,0.5f):0.2f;
         for (int h=0; h<2; ++h) {
             const auto& p=hands[h];
             const bool valid=p.tracked&&finite(p.x)&&finite(p.y)&&finite(p.z)&&finite(p.squeeze);
+            validHands[h]=valid;
             const bool down=finite(p.squeeze)&&p.squeeze > (pressed_[h] ? 0.15f : 0.55f);
             if(!valid) {
                 lost_[h]+=dt;
-                if(!p.tracked && down && active && state_.held[h] && lost_[h]<0.20f) {
+                if(!p.tracked && down && active && state_.held[h] && lost_[h]<grace) {
                     center_[h]=true;
                 } else { state_.held[h]=false; pressed_[h]=down; }
                 continue;
@@ -52,9 +80,9 @@ public:
             const float y=p.y-Height, z=p.z-Depth;
             const float radial=std::hypot(p.x,y);
             const float gripX=radius*std::cos(state_.angle),gripY=-radius*std::sin(state_.angle);
-            const bool near_rim=std::abs(z)<0.35f && (handlebars
-                ? std::min(std::hypot(p.x-gripX,y-gripY),std::hypot(p.x+gripX,y+gripY))<std::max(0.22f,radius*0.55f)
-                : radial<std::max(radius+0.16f,0.32f));
+            const bool near_rim=std::abs(z)<reach && (handlebars
+                ? std::min(std::hypot(p.x-gripX,y-gripY),std::hypot(p.x+gripX,y+gripY))<std::max(0.22f,radius*0.55f)*assist
+                : radial<std::max(radius+0.16f,0.32f)*assist);
             const float angle=-std::atan2(y,p.x);
             // Arcade latch: distance only gates acquisition. Once grabbed,
             // large gestures and vehicle animation cannot release ownership.
@@ -85,10 +113,18 @@ public:
         // Two hands define one rigid control. Their relative angle ignores
         // shared translations, so leaning or moving both arms does not steer.
         const float spanX=hands[1].x-hands[0].x,spanY=hands[1].y-hands[0].y;
-        const bool pair=moving[0]&&moving[1]&&std::hypot(spanX,spanY)>0.12f;
+        // Pair orientation is defined by the span, even when one hand is near
+        // the original hub after a common translation of both arms.
+        const bool pair=state_.held[0]&&state_.held[1]&&validHands[0]&&validHands[1]&&
+            std::hypot(spanX,spanY)>(pairValid_?0.10f:0.14f);
         const float pairAngle=pair ? -std::atan2(spanY,spanX):0;
         float change=weightSum>0 ? deltaSum/weightSum:0;
-        if(pair && pairValid_) change=std::remainder(pairAngle-lastPair_,6.283185307f);
+        // With both hands held, do not switch to angles about the hub when
+        // their span collapses: that changes the reference frame and creates
+        // false turns as the hands approach/cross each other. Hold the angle
+        // through that singularity and establish a fresh pair baseline on exit.
+        if(state_.held[0] && state_.held[1])
+            change=pair && pairValid_ ? std::remainder(pairAngle-lastPair_,6.283185307f):0;
         pairValid_=pair; lastPair_=pairAngle;
         // Rebase a discontinuous tracking pose without sending a full-lock
         // impulse. Normal fast arcade steering remains inside this envelope.
@@ -97,13 +133,21 @@ public:
         if(held && !previouslyHeld) target_=state_.angle;
         // A single accumulated target avoids jumps when a second hand joins,
         // leaves, passes through the hub or temporarily loses tracking.
-        target_=held ? std::clamp(target_+change,-maxAngle,maxAngle):0;
+        // Keep physical overtravel. Clamping this accumulator discards motion
+        // past full lock, so retracing the gesture no longer returns to centre.
+        // Only the game's steering command is saturated, never the hand angle.
+        target_=held ? target_+change:0;
         const float error=target_-state_.angle;
         // Quiet near a steady heading, responsive during deliberate turns.
-        const float response=held ? std::clamp(18.0f+80.0f*std::abs(error),18.0f,60.0f):12.0f;
+        const float tuningResponse=finite(tuning.response)?std::clamp(tuning.response,0.5f,2.0f):1;
+        const float response=held ? std::clamp((18.0f+80.0f*std::abs(error))*tuningResponse,9.0f,90.0f):12.0f;
         state_.angle += error*(1-std::exp(-dt*response));
         state_.steering=active ? std::clamp(state_.angle/maxAngle,-1.0f,1.0f) : 0;
         if (!active) { state_.angle=0;target_=0;pairValid_=false; }
+        // Share the validated physical rotation with both renderer paths.
+        // Handlebars keep their limited travel; a kart wheel can turn freely.
+        state_.visualAngle=handlebars ? std::clamp(state_.angle,-maxAngle,maxAngle)
+            : std::remainder(state_.angle,6.283185307f);
         return state_;
     }
 private:

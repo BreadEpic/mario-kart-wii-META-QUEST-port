@@ -1303,6 +1303,87 @@ static void TerminateHandler() {
     std::_Exit(EXIT_FAILURE);
 }
 
+#if defined(_WIN32)
+void SelectSteamVROpenXRForProcess() {
+    std::vector<std::filesystem::path> candidates;
+    wchar_t registered[32768]{};DWORD bytes=sizeof(registered);
+    if(RegGetValueW(HKEY_LOCAL_MACHINE,L"SOFTWARE\\Khronos\\OpenXR\\1",L"ActiveRuntime",
+        RRF_RT_REG_SZ,nullptr,registered,&bytes)==ERROR_SUCCESS) {
+        std::filesystem::path path(registered);
+        if(path.filename()==L"steamxr_win64.json") candidates.push_back(path);
+    }
+    wchar_t steam[32768]{};bytes=sizeof(steam);
+    if(RegGetValueW(HKEY_CURRENT_USER,L"Software\\Valve\\Steam",L"SteamPath",
+        RRF_RT_REG_SZ,nullptr,steam,&bytes)==ERROR_SUCCESS) {
+        const std::filesystem::path root(steam);
+        candidates.push_back(root/L"steamapps/common/SteamVR/steamxr_win64.json");
+        // SteamVR can be installed in a secondary Steam library.
+        std::ifstream libraries(root/L"steamapps/libraryfolders.vdf");
+        std::string line;
+        while(std::getline(libraries,line)) {
+            const auto key=line.find("\"path\"");if(key==std::string::npos) continue;
+            const auto begin=line.find('"',key+6);
+            const auto end=begin==std::string::npos?begin:line.find('"',begin+1);
+            if(begin==std::string::npos || end==std::string::npos) continue;
+            std::string directory=line.substr(begin+1,end-begin-1);
+            for(size_t pos=0;(pos=directory.find("\\\\",pos))!=std::string::npos;) directory.erase(pos,1);
+            candidates.push_back(std::filesystem::u8path(directory)/L"steamapps/common/SteamVR/steamxr_win64.json");
+        }
+    }
+    for(const auto& path:candidates) {
+        std::error_code ec;
+        if(!std::filesystem::is_regular_file(path,ec)) continue;
+        if(_wputenv_s(L"XR_RUNTIME_JSON",path.c_str())!=0 ||
+            !SetEnvironmentVariableW(L"XR_RUNTIME_JSON",path.c_str()))
+            throw std::runtime_error("Could not select the SteamVR OpenXR runtime.");
+        RuntimeConfigFile::Mutable().vrRequired=true;
+        RT_LOG(RT_TAG_RUNTIME) << "OpenXR: SteamVR selected for this process: " << path << std::endl;
+        return;
+    }
+    throw std::runtime_error("SteamVR is required for VR mode. Install SteamVR in Steam, connect your headset, and launch the game again.");
+}
+
+void ConfigureVirtualDesktopOpenXRLayerForProcess() {
+    const char* programFiles = std::getenv("ProgramFiles");
+    if (!programFiles || *programFiles == '\0') {
+        return;
+    }
+
+    const std::filesystem::path manifest =
+        std::filesystem::path(programFiles) / "Virtual Desktop Streamer" /
+        "openxr-oculus-compatibility.json";
+    std::ifstream input(manifest, std::ios::binary);
+    if (!input) {
+        return;
+    }
+
+    const std::string text((std::istreambuf_iterator<char>(input)),
+                           std::istreambuf_iterator<char>());
+    const std::string key = "\"disable_environment\"";
+    const std::size_t keyPos = text.find(key);
+    if (keyPos == std::string::npos) {
+        return;
+    }
+    const std::size_t colon = text.find(':', keyPos + key.size());
+    const std::size_t quoteBegin =
+        colon == std::string::npos ? std::string::npos : text.find('"', colon + 1);
+    const std::size_t quoteEnd =
+        quoteBegin == std::string::npos ? std::string::npos : text.find('"', quoteBegin + 1);
+    if (quoteBegin == std::string::npos || quoteEnd == std::string::npos ||
+        quoteEnd <= quoteBegin + 1) {
+        return;
+    }
+
+    const std::string envName = text.substr(quoteBegin + 1, quoteEnd - quoteBegin - 1);
+    if (std::getenv(envName.c_str()) == nullptr) {
+        _putenv_s(envName.c_str(), "1");
+        RT_LOG(RT_TAG_RUNTIME)
+            << "OpenXR: disabled Virtual Desktop Oculus compatibility layer for this process."
+            << std::endl;
+    }
+}
+#endif
+
 // Runtime entry point: loads the configuration, brings up aurora and runs the game.
 int RuntimeMain(int argc, char** argv) {
     // Must run before the transcript duplicates stdout/stderr: it decides what
@@ -1413,8 +1494,15 @@ int RuntimeMain(int argc, char** argv) {
                 break;
             }
         }
-        const mkw::vr::OpenXRStartupResult openxrStartup =
-            mkw::vr::OpenXRPrepareAurora(auroraConfig);
+        const char* introPreview=std::getenv("MKW_VR_INTRO_PREVIEW");
+        if(introPreview) { RuntimeConfigFile::Mutable().vrEnabled=false;RuntimeConfigFile::Mutable().vrRequired=false; }
+#if defined(_WIN32)
+        if (RuntimeConfigFile::VrEnabled(false)) {
+            SelectSteamVROpenXRForProcess();
+            ConfigureVirtualDesktopOpenXRLayerForProcess();
+        }
+#endif
+        const auto openxrStartup = mkw::vr::OpenXRPrepareAurora(auroraConfig);
         if (openxrStartup == mkw::vr::OpenXRStartupResult::Unavailable) {
             const std::string error = mkw::vr::OpenXRLastError();
             if (RuntimeConfigFile::VrRequired(false)) {
@@ -1468,6 +1556,36 @@ int RuntimeMain(int argc, char** argv) {
                 << error << std::endl;
         }
 
+        if(introPreview) {
+            aurora_set_frame_worker_wait_callback(nullptr);
+            aurora_request_frame_capture(5,"onboarding-preview.png");
+            for(int frame=0;frame<15;++frame) {
+                UpdateAuroraAndProcessEvents();
+                if(aurora_begin_frame()) {
+                    settings_overlay::DrawVrIntroPreview(std::atoi(introPreview));
+                    aurora_end_frame();
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(16));
+            }
+            aurora_quiesce_frame_worker();
+            mkw::vr::OpenXRShutdownBeforeAurora();aurora_shutdown();DiscordPresence::Shutdown();
+            ShutdownProcessTranscript();return 0;
+        }
+        // Start OpenXR before the guest entry point so the first-run choice is
+        // usable inside the headset, without a ROM/menu running behind it.
+        if(mkw::vr::OpenXRIsRunning() && settings_overlay::VrWelcomePending()) {
+            aurora_set_frame_worker_wait_callback(nullptr);
+            while(mkw::vr::OpenXRIsRunning() && settings_overlay::VrWelcomePending()) {
+                UpdateAuroraAndProcessEvents();
+                if(aurora_begin_frame()) {
+                    mkw::vr::OpenXRServiceProducerFrameBoundary();
+                    settings_overlay::DrawVrWelcome();
+                    aurora_end_frame();
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(8));
+            }
+            aurora_set_frame_worker_wait_callback(ServiceGuestTimingDuringAuroraFrameWait);
+        }
         auto entry = ResolveEntry();
         InitializePersistentCpuContext();
         auto& cpu = GetPersistentCpuContext();

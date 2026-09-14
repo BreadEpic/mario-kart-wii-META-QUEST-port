@@ -62,6 +62,23 @@ Assert-File $clangBinary 'Portable clang driver binary'
 Assert-Directory $dependencies 'Pinned offline dependency sources'
 Assert-Directory $auroraSource 'aurora-main source tree'
 
+# Record inputs before compilation. A fingerprint taken only afterward can label
+# an older archive as current when a maintainer edits sources during the build.
+$initialAuroraFingerprint = Get-MkwAuroraSourceFingerprint $auroraSource
+$initialThirdPartyFingerprint = Get-MkwThirdPartySourceFingerprint (Join-Path $runtimeSource 'third_party')
+if (-not $initialAuroraFingerprint -or -not $initialThirdPartyFingerprint) {
+    throw 'Unable to fingerprint native sources before compilation.'
+}
+# Both directories are recreated or removed below; reject external/custom roots
+# that could accidentally name user data or overlap a source tree.
+foreach ($entry in @(@{Path=$package;Root=$dependencies},@{Path=$stage;Root=(Join-Path $repoRoot 'build')})) {
+    $resolved=[IO.Path]::GetFullPath($entry.Path)
+    $allowed=[IO.Path]::GetFullPath($entry.Root).TrimEnd('\','/')+[IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($allowed,[StringComparison]::OrdinalIgnoreCase)) {
+        throw "Unsafe native build output directory: $resolved (expected a child of $allowed)"
+    }
+}
+
 if ($Parallel -le 0) { $Parallel = [Environment]::ProcessorCount }
 
 # The package must never contain a stale mixture of two builds.
@@ -364,6 +381,10 @@ $thirdPartyDirectory = Join-Path $runtimeSource 'third_party'
 $thirdPartySourceFingerprint = Get-MkwThirdPartySourceFingerprint $thirdPartyDirectory
 if (-not $thirdPartySourceFingerprint) {
     throw "The vendored third-party tree could not be fingerprinted: $thirdPartyDirectory"
+}
+if ($auroraSourceFingerprint -ne $initialAuroraFingerprint -or
+    $thirdPartySourceFingerprint -ne $initialThirdPartyFingerprint) {
+    throw 'Native sources changed during compilation. Rebuild before packaging; provenance was not written.'
 }
 
 $contents = @(Get-ChildItem -LiteralPath $package -Recurse -File | ForEach-Object {

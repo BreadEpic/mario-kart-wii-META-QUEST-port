@@ -157,6 +157,7 @@ struct FirstPersonState {
     uint32_t seated_driver=0;
     std::optional<float> cockpit_forward;
     CameraMode mode = CameraMode::Game;
+    bool opening_pending = false;
     FirstPersonHeadOffsets offsets{};
     float units_per_meter = 100.0f;
 
@@ -194,29 +195,31 @@ uint32_t LocalDriver(const KartPoseRead& kart) noexcept {
     return Memory::Contains(driver, 0x144) ? driver : 0;
 }
 
-void PublishNativeWheelMesh(const KartPoseRead& kart,const Mtx34& modelView,
+bool PublishNativeWheelMesh(const KartPoseRead& kart,const Mtx34& modelView,
                            const Mtx34& left,const Mtx34& right,
                            uint32_t part=0,const Mtx34* correction=nullptr) noexcept {
     uint32_t model=0,mdl=0;
     if(!ReadGuestPointer((part?part:kart.body)+0x7c,model) || !ReadGuestPointer(model+0xc,mdl) ||
-       !Memory::Contains(mdl,0x40) || Memory::Read32(mdl)!=0x4d444c30) return;
+       !Memory::Contains(mdl,0x40) || Memory::Read32(mdl)!=0x4d444c30) return false;
     const auto input=ReadQuestInputSnapshot();
-    if(!input.active) return;
+    if(!input.active) return false;
     const float steering=QuestAxis(input.wheel_active?input.wheel_steering:input.steering_x);
     // In native model coordinates +X is the driver's left. Positive rotation
     // around +Z consequently looks clockwise to the seated driver.
-    const float angle=steering*1.570796327f;
+    const float angle=input.cockpit_controls && detail::IsFiniteFloat(&input.wheel_angle)
+        ? input.wheel_angle : steering*1.570796327f;
     const detail::Vec3 center{(left[3]+right[3])*0.5f,(left[7]+right[7])*0.5f,(left[11]+right[11])*0.5f};
     const float radius=std::abs(left[3]-right[3])*0.5f;
+    bool published=false;
     try {
         const uint32_t version=Memory::Read32(mdl+8);
-        if(version<8 || version>11) return;
+        if(version<8 || version>11) return false;
         const uint32_t dicOffset=Memory::Read32(mdl+0x18);
-        if(!dicOffset || dicOffset>0x100000) return;
+        if(!dicOffset || dicOffset>0x100000) return false;
         const uint32_t dic=mdl+dicOffset;
-        if(!Memory::Contains(dic,8)) return;
+        if(!Memory::Contains(dic,8)) return false;
         const uint32_t count=Memory::Read32(dic+4);
-        if(count>16 || !Memory::Contains(dic,8+(count+1)*16)) return;
+        if(count>16 || !Memory::Contains(dic,8+(count+1)*16)) return false;
         for(uint32_t entry=1;entry<=count;++entry) {
             const uint32_t offset=Memory::Read32(dic+8+entry*16+12);
             if(offset>0x100000) continue;
@@ -242,9 +245,9 @@ void PublishNativeWheelMesh(const KartPoseRead& kart,const Mtx34& modelView,
                 else points[i].z=value;
             }
             if(!valid) continue;
-            if(correction) {
+            if(correction && part) {
                 for(auto& point:points) point=detail::TransformPoint(*correction,point.x,point.y,point.z);
-            } else if(RotateNativeWheelVertices(points,center,radius,angle)<8) continue;
+            } else if(RotateNativeWheelVertices(points,center,radius,angle,correction)<8) continue;
             const auto* source=Memory::GetPointer(data,size);
             std::vector<uint8_t> bytes(source,source+size);
             for(uint32_t i=0;i<num;++i) for(int axis=0;axis<3;++axis) {
@@ -261,9 +264,10 @@ void PublishNativeWheelMesh(const KartPoseRead& kart,const Mtx34& modelView,
                 for(uint32_t b=0;b<componentSize;++b)
                     bytes[i*stride+axis*componentSize+b]=uint8_t(encoded>>((componentSize-b-1)*8));
             }
-            if(valid) aurora_set_native_wheel_vertices(source,bytes.data(),size,modelView.data());
+            if(valid) { aurora_set_native_wheel_vertices(source,bytes.data(),size,modelView.data()); published=true; }
         }
     } catch(const Memory::AccessViolation&) {}
+    return published;
 }
 
 void HideDriver(uint32_t driver) noexcept {
@@ -323,6 +327,9 @@ std::array<float,3> ReadPlayerScale(const KartPoseRead& kart) noexcept {
 bool ReadDriverEye(const KartPoseRead& kart, std::array<float, 3>& eye) noexcept {
     const uint32_t driver=LocalDriver(kart);
     if(g_state.seated_driver!=driver) { g_state.seated_driver=driver;g_state.seated_eye={};g_state.cockpit_forward.reset(); }
+    // The neutral seated reference is intentionally frozen until identity or
+    // race reset. Do not rescan model dictionaries and palettes every frame.
+    if(driver && g_state.seated_eye.valid) { eye=g_state.seated_eye.value;return true; }
     uint32_t bones = 0;
     Mtx34 placement{};
     if (!driver || !ReadGuestPointer(driver + 0x104, bones) ||
@@ -459,7 +466,9 @@ void MkwVRFirstPersonConfigure(bool enabled, const FirstPersonHeadOffsets& offse
 
 void MkwVRCycleCamera() noexcept {
     std::lock_guard lock(g_mutex);
+    if(g_state.opening_pending) return;
     g_state.mode = NextCameraMode(g_state.mode);
+    g_state.stabilizer = {};
     g_state.anchor = {};
     g_state.hold_frames = 0;
     g_state.failure_logged = false;
@@ -473,9 +482,18 @@ CameraMode MkwVRGetCameraMode() noexcept {
     return g_state.mode;
 }
 
+bool MkwVRRaceIntroActive() noexcept {
+    std::lock_guard lock(g_mutex);
+    return g_state.opening_pending;
+}
+FirstPersonCameraSnapshot MkwVRFirstPersonGetSnapshot() noexcept {
+    std::lock_guard lock(g_mutex);
+    return {g_state.mode,g_state.anchor};
+}
+
 void MkwVRSetCameraMode(CameraMode mode) noexcept {
     std::lock_guard lock(g_mutex);
-    g_state.mode = mode;
+    g_state.mode = g_state.opening_pending ? CameraMode::Game : mode;
     g_state.anchor = {};
     g_state.hold_frames = 0;
     g_state.stabilizer = {};
@@ -500,6 +518,7 @@ void MkwVRFirstPersonReset() noexcept {
     MkwVRFirstPersonRestoreDriver();
     std::lock_guard lock(g_mutex);
     g_state.mode = CameraMode::Game;
+    g_state.opening_pending = true;
     g_state.seated_driver=0;
     g_state.seated_eye={};
     g_state.cockpit_forward.reset();
@@ -516,6 +535,22 @@ void MkwVRFirstPersonReset() noexcept {
 void MkwVRFirstPersonUpdate(uint64_t guest_frame_index, uint32_t race_camera_address) noexcept {
     MkwVRFirstPersonRestoreDriver();
     std::lock_guard lock(g_mutex);
+    if(g_state.opening_pending) {
+        // Raceinfo::CreateInstance (80532084): singleton at 809BD730.
+        // IsAtLeastStage (80536230): stage at +28. Update (805331B4)
+        // leaves stage 0 after the opening pans OR the skip request.
+        // A missing/uninitialized pan must never unlock the camera early.
+        g_state.mode=CameraMode::Game;
+        uint32_t raceInfo=0;
+        if(!ReadGuestPointer(0x809BD730u,raceInfo) ||
+           !Memory::Contains(raceInfo+0x28,4) || !race_camera_address) return;
+        const uint32_t stage=Memory::Read32(raceInfo+0x28);
+        if(stage==0 || stage>4) return;
+        g_state.opening_pending=false;
+        g_state.mode=static_cast<CameraMode>(RuntimeConfigFile::Get().vrDefaultCamera);
+        RT_LOG(RT_TAG_RUNTIME) << "[mkw-vr] race introduction finished: stage=" << stage
+                              << ", frame=" << guest_frame_index << std::endl;
+    }
     if (g_state.mode == CameraMode::Game) {
         Mtx34 unused{};
         const auto kart=ReadPlayerKartPose(unused);
@@ -627,6 +662,7 @@ void MkwVRFirstPersonUpdate(uint64_t guest_frame_index, uint32_t race_camera_add
     if (failed_step == nullptr) {
         g_state.anchor = {anchor, true, guest_frame_index, g_state.mode == CameraMode::Far
             ? RuntimeConfigFile::VrDioramaUnitsPerMeter() : renderUnits};
+        g_state.anchor.vehicle_identity=kart.body;
         if (g_state.mode == CameraMode::FirstPerson) {
             uint32_t handleVtable=0;
             // BodyBike constructs BikeHandle at +238; its vtable is written
@@ -635,12 +671,14 @@ void MkwVRFirstPersonUpdate(uint64_t guest_frame_index, uint32_t race_camera_add
                 handleVtable==0x808b5314u;
             // Body::vf_0x58 (8056C500) builds the mirrored hand grip frames
             // at A8/D8 from KartDriverDispParam+8 via 80592BF8. The visual
-            // body matrix (+1C) keeps these targets attached during impacts.
+            // animated body matrix (+1C) must not drive the interaction frame:
+            // damage and tricks rotate the chassis independently of the seat.
             Mtx34 body{}, left{}, right{}, seatFromBody{};
             if (ReadGuestMtx34(kart.body+0x1c,body) &&
                 ReadGuestMtx34(kart.body+0xa8,left) && ReadGuestMtx34(kart.body+0xd8,right)) {
+                const auto stableBody=ScaleModelBasis(kart_from_local,playerScale);
                 const auto toSeat=[&](float x,float y,float z) {
-                    const auto world=detail::TransformPoint(body,x*playerScale[0],y*playerScale[1],z*playerScale[2]);
+                    const auto world=detail::TransformPoint(stableBody,x,y,z);
                     const auto view=detail::TransformPoint(view_from_world,world.x,world.y,world.z);
                     return detail::TransformPoint(anchor,view.x,view.y,view.z);
                 };
@@ -671,7 +709,7 @@ void MkwVRFirstPersonUpdate(uint64_t guest_frame_index, uint32_t race_camera_add
                             InvertMtx(renderedHandle,inverseHandle);
                             if(RuntimeConfigFile::VrNativeSteeringWheel()) {
                                 const auto correction=ComposeMtx(inverseHandle,stableHandle);
-                                PublishNativeWheelMesh(kart,ComposeMtx(view_from_world,renderedHandle),left,right,
+                                g_state.anchor.native_mesh_prepared=PublishNativeWheelMesh(kart,ComposeMtx(view_from_world,renderedHandle),left,right,
                                     kart.body+0x238,&correction);
                             }
                             handle=stableHandle;
@@ -691,12 +729,13 @@ void MkwVRFirstPersonUpdate(uint64_t guest_frame_index, uint32_t race_camera_add
                     }
                 }
                 if(!g_state.anchor.bike && g_state.anchor.native_wheel.valid && RuntimeConfigFile::VrNativeSteeringWheel()) {
-                    Mtx34 modelView{};
-                    for(int row=0;row<3;++row) for(int col=0;col<4;++col) {
-                        modelView[row*4+col]=col==3?view_from_world[row*4+3]:0;
-                        for(int k=0;k<3;++k) modelView[row*4+col]+=view_from_world[row*4+k]*body[k*4+col];
+                    const auto renderedBody=ScaleModelBasis(body,playerScale);
+                    Mtx34 inverseRendered{};
+                    if(InvertMtx(renderedBody,inverseRendered)) {
+                        const auto correction=ComposeMtx(inverseRendered,stableBody);
+                        g_state.anchor.native_mesh_prepared=PublishNativeWheelMesh(kart,
+                            ComposeMtx(view_from_world,renderedBody),left,right,0,&correction);
                     }
-                    PublishNativeWheelMesh(kart,ScaleModelBasis(modelView,playerScale),left,right);
                 }
             }
         }

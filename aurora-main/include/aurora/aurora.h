@@ -168,7 +168,30 @@ typedef enum {
   bool handHud;
     float handHudViewFromPanel[AURORA_STEREO_EYE_COUNT][12];
     AuroraCockpit cockpit;
+    // Room-anchored native UI, rendered separately for each eye.
+    struct {
+      bool anchored;
+      bool tracked[2];
+      float distance, width;
+      float eyeFromPanel[2][12];
+        float panelFromGrip[2][12];
+        bool pointerTracked[2];
+        float pointerRay[2][6];
+    } ui;
+    // Internal raster scale, independent of the runtime swapchain size. Zero = 1.
+    float renderScale;
 } AuroraStereoFrame;
+  typedef struct { float position[3], color[3], uv[2]; uint32_t material; } AuroraVRControllerVertex;
+  void aurora_set_vr_ui_pointer(float x,float y,bool active,bool down);
+void aurora_set_vr_controller_model(uint32_t hand, const AuroraVRControllerVertex* triangles, uint32_t count);
+void aurora_set_vr_controller_texture(uint32_t material, uint32_t width, uint32_t height, const uint8_t* rgba);
+float aurora_get_vr_panel_aspect(void);
+void aurora_set_vr_controller_anchors(uint32_t hand, const float* positions);
+void aurora_set_vr_menu_shader_quality(int quality);
+typedef struct { bool active; float headerEnd, footerStart; float labels[10][4]; } AuroraVRUiGuide;
+void aurora_set_vr_ui_guide(const AuroraVRUiGuide* guide);
+uint32_t aurora_native_wheel_draw_count(void);
+void aurora_set_stereo_scene_anchor_scaled(const float anchorFromScene[12], float unitsPerMeter);
 
 /**
  * Called on Aurora's frame worker immediately before a GX frame is sealed.

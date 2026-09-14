@@ -6,15 +6,23 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include "vr/onboarding.h"
 
 namespace mkw::vr {
 
 struct QuestInput {
+    std::array<UiHandPose,2> ui_hands{};
+    std::array<float,2> ui_grips{};
+    UiHandPose ui_pointer{};
+    UiHandPose ui_left_pointer{};
+    float ui_aspect=1;
+    bool steamvr=false;
     bool active = false;
     bool wheel_active = false;
     bool cockpit_controls = false;
     bool reverse = false;
     float wheel_steering = 0;
+    float wheel_angle = 0; // Physical visual rotation, independent of saturated steering.
     float steering_x = 0, steering_y = 0;
     float tricks_x = 0, tricks_y = 0;
     float accelerate = 0, item = 0, drift = 0;
@@ -33,6 +41,25 @@ struct QuestStickCalibration {
     float outer = 1.0f;
     float center_x = 0.0f, center_y = 0.0f;
 };
+struct QuestButtonMapping { bool swapItemTrick=false, swapCockpitDriftBrake=false; };
+
+// SteamVR owns the system/menu button. Keep immediate tricks on X and provide
+// a deliberate long-X pause without forwarding a duplicated runtime menu action.
+class SteamVrTrickPause {
+    int64_t started_=0;
+    bool held_=false, blocked_=false, fired_=false;
+public:
+    struct Result { bool trick=false,pause=false; };
+    Result Update(bool active,bool down,bool chord,int64_t time) {
+        if(!active) { held_=false;blocked_=true;fired_=false;return {}; }
+        if(!down) { held_=blocked_=fired_=false;return {}; }
+        if(blocked_) return {};
+        if(!held_) { held_=true;started_=time; }
+        if(chord || time<started_) { fired_=true;return {true,false}; }
+        if(!fired_ && time-started_>=650000000) { fired_=true;return {false,true}; }
+        return {!fired_,false};
+    }
+};
 
 inline float CenterQuestAxis(float value, float center) noexcept {
     center = std::clamp(QuestAxis(center), -0.3f, 0.3f);
@@ -40,11 +67,17 @@ inline float CenterQuestAxis(float value, float center) noexcept {
     return std::clamp(offset / (offset >= 0 ? 1.0f - center : 1.0f + center), -1.0f, 1.0f);
 }
 
-inline PADStatus MapQuestInput(const QuestInput& input, const QuestStickCalibration& calibration = {}) noexcept {
+inline PADStatus MapQuestInput(QuestInput input, const QuestStickCalibration& calibration = {}, QuestButtonMapping mapping = {}) noexcept {
     PADStatus pad{};
     pad.err = input.active ? PAD_ERR_NONE : PAD_ERR_NO_CONTROLLER;
     if (!input.active) return pad;
     if (QuestAxis(input.item) > 0.5f && input.trick) return pad; // X + Y opens VR settings.
+    if (mapping.swapItemTrick) {
+        const bool item=QuestAxis(input.item)>0.5f;
+        input.item=input.trick?1.0f:0.0f;
+        input.trick=item;
+    }
+    if (input.cockpit_controls && mapping.swapCockpitDriftBrake) std::swap(input.confirm,input.brake);
     const float x = CenterQuestAxis(input.steering_x, calibration.center_x);
     const float y = CenterQuestAxis(input.steering_y, calibration.center_y);
     const float length = std::sqrt(x * x + y * y);
@@ -58,7 +91,7 @@ inline PADStatus MapQuestInput(const QuestInput& input, const QuestStickCalibrat
     }
     if (input.wheel_active) {
         pad.stickX = static_cast<int8_t>(std::lround(QuestAxis(input.wheel_steering) * 100.0f));
-        pad.stickY = 0;
+        // Keep item aim (forward/back) independent from wheel steering.
     }
     if (QuestAxis(input.accelerate) > 0.5f || (input.confirm && !input.cockpit_controls)) {
         pad.button |= PAD_BUTTON_A;
@@ -116,8 +149,10 @@ private:
 
 // XR thread publishes; guest PADRead consumes. No OpenXR calls on the guest thread.
 void PublishQuestInput(const QuestInput& input) noexcept;
+void RequestQuestPausePulse() noexcept;
 QuestInput ReadQuestInputSnapshot() noexcept;
 void SetQuestStickCalibration(const QuestStickCalibration& calibration) noexcept;
+void SetQuestButtonMapping(QuestButtonMapping mapping) noexcept;
 bool ReadQuestPad(PADStatus& output, bool blocked) noexcept;
 
 } // namespace mkw::vr

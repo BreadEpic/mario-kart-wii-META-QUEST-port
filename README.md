@@ -140,8 +140,8 @@ Known limitations of the Wii Remote path:
 - GPU: GTX 1650 / RX 6400 / Arc A310 or higher
 - CPU: Intel Core i5-8400 / AMD Ryzen 5 2600 (4c/6c, ~3.5GHz+) or higher
 - About 20 GB of free disk space during installation (Final game size ~5 GB)
-- macOS 14 (Sonoma) or later on Apple Silicon
-- On macOS, Apple Xcode Command Line Tools (Setup opens Apple's installer when they are missing)
+- The distributed OpenXR VR port targets Windows/D3D12. Upstream macOS desktop build code is
+  retained in the sources but is not a supported VR release target.
 - A clean, unmodified **PAL `RMCP01`** disc image of Mario Kart Wii, dumped by you. ISO, GCM,
   GCZ, CISO, WBFS, WIA and RVZ are accepted.
 
@@ -156,6 +156,21 @@ regions, patched executables) is rejected outright.
 > game files won't be provided or tolerated.
 
 ## Installing
+
+Version 1.0 adds configurable physical steering, limited button remapping,
+grab/release haptics, a VR diagnostic panel and optional adaptive resolution. See
+[OPENXR.md](OPENXR.md) for defaults, restart requirements and remaining limitations; these changes
+are not part of the already published v0.6.1 archive.
+
+New portable builds include `Update-VR.cmd`. It checks the VR project's own release, verifies its
+archive and managed files, preserves personal/game data and retains previous program files for
+recovery. Close Wheel Wizard and the games before updating. Run setup afterward to compile your
+own game with the new runtime. Wheel Wizard's upstream auto-updater stays disabled for VR bundles.
+
+The installer supports cancellation, retries interrupted downloads and resumes only when the
+server supplies a strong matching ETag. A failed Retro Rewind compilation restores the previous
+pack. This does not make every file written by the game compilation transactionally replaceable;
+keep your previous portable folder when testing a development build.
 
 Download `WiiCompiled-VR-Portable-v0.6.1.zip` from the
 [latest release](https://github.com/heurazy/mario-kart-wii-VR-port/releases/latest). This is the only
@@ -262,7 +277,23 @@ GitHub so we can take a look at it.
 AI coding tools were used during development of this project. 
 All translated output is verified against real hardware behavior and most importantly, physics accuracy is proven synced across Wii, Dolphin, and WiiCompiled (see FAQ). 
 
+## First-launch VR introduction
+
+Before the game starts, choose Original, First person or Diorama with the right-controller
+pointer and trigger. Each camera has a description; the choice is saved as your race default.
+In your first single-player race, the game pauses for an illustrated controller guide.
+First person has its own guide when first entered; Original and Diorama share one.
+Select **Continue racing** to resume. VR options let you change **Default camera** or
+select **Show control tutorials again**. The interface and guides are in English.
+See [OPENXR.md](OPENXR.md#camera-and-hud) for persistence and unpausable-session behavior.
+
 ## Credits
+
+- **[BigWalkVRInstaller / BigWalkVR](https://github.com/CircuitLord/BigWalkVRInstaller)** by
+  **Jordan (CircuitLord)** — reference for controller-attached tutorial labels. The callout
+  placement is adapted to native OpenXR/C++; the controller illustrations, pointer panel,
+  Mario Kart pause handling and progress storage are implemented here. No Unity plugin is
+  bundled. See [the retained MIT notice](licenses/BigWalkVR-MIT.txt).
 
 - **[aurora](https://github.com/encounter/aurora)** - the GX rendering/windowing backend this
   project's whole graphics layer sits on. MIT licensed.

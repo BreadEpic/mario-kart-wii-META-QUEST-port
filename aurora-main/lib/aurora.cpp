@@ -98,6 +98,7 @@ struct StereoSceneAnchor {
       0.f, 0.f, 1.f, 0.f,
   };
   bool active = false;
+  float unitsPerMeter=0;
 };
 // Producer thread only, between aurora_set_stereo_scene_anchor() and the seal
 // that consumes it. Cleared at every seal so a producer that stops publishing
@@ -541,6 +542,9 @@ struct StereoEyeTarget {
   const webgpu::TextureWithSampler& output() const noexcept { return resolvedColor.texture ? resolvedColor : color; }
 };
 std::array<StereoEyeTarget, AURORA_STEREO_EYE_COUNT> g_stereoEyeTargets;
+std::array<webgpu::TextureWithSampler,AURORA_STEREO_EYE_COUNT> g_stereoUpscaled;
+std::array<wgpu::BindGroup,AURORA_STEREO_EYE_COUNT> g_stereoUpscaleBindings;
+std::array<std::array<uint32_t,2>,AURORA_STEREO_EYE_COUNT> g_stereoOutputSizes{};
 
 void ensure_stereo_eye_target(uint32_t eyeIndex, uint32_t width, uint32_t height) {
   auto& target = g_stereoEyeTargets[eyeIndex];
@@ -644,8 +648,17 @@ gfx::StereoReplayFrame make_stereo_replay_frame(const AuroraStereoFrame& input, 
   std::memcpy(&anchorFromScene, sceneAnchor.anchorFromScene.data(), sizeof(anchorFromScene));
   gfx::StereoReplayFrame replay{};
   replay.cockpit = input.cockpit;
+  const float frameUnits=sceneAnchor.active && sceneAnchor.unitsPerMeter>0 ? sceneAnchor.unitsPerMeter:input.cockpit.unitsPerMeter;
+  const float unitRatio=input.cockpit.unitsPerMeter>0 ? frameUnits/input.cockpit.unitsPerMeter:1;
+  replay.cockpit.unitsPerMeter=frameUnits;
   for (uint32_t eye = 0; eye < AURORA_STEREO_EYE_COUNT; ++eye) {
-    ensure_stereo_eye_target(eye, input.eyes[eye].width, input.eyes[eye].height);
+    const float scale=input.mode==AURORA_STEREO_FRAME_IMMERSIVE_REPLAY && input.renderScale>=.5f && input.renderScale<1 ? input.renderScale:1;
+    const uint32_t width=std::max(1u,uint32_t(input.eyes[eye].width*scale));
+    const uint32_t height=std::max(1u,uint32_t(input.eyes[eye].height*scale));
+    const auto previousView=g_stereoEyeTargets[eye].output().view.Get();
+    ensure_stereo_eye_target(eye,width,height);
+    g_stereoOutputSizes[eye]={input.eyes[eye].width,input.eyes[eye].height};
+    if(previousView!=g_stereoEyeTargets[eye].output().view.Get()) g_stereoUpscaleBindings[eye]=nullptr;
     const auto& owned = g_stereoEyeTargets[eye];
     const auto& output = owned.output();
     auto& view = replay.eyes[eye];
@@ -661,6 +674,10 @@ gfx::StereoReplayFrame make_stereo_replay_frame(const AuroraStereoFrame& input, 
     };
     std::memcpy(&view.projection, input.eyes[eye].projection, sizeof(view.projection));
     std::memcpy(&view.viewFromCenter, input.eyes[eye].viewFromCenter, sizeof(view.viewFromCenter));
+    // The sealed guest camera owns its scale. XR may have sampled just before
+    // lightning or a camera transition; rescale only head/IPD translation.
+    auto* eyeTransform=reinterpret_cast<float*>(&view.viewFromCenter);
+    eyeTransform[3]*=unitRatio;eyeTransform[7]*=unitRatio;eyeTransform[11]*=unitRatio;
     view.handHud = input.handHud;
     if (input.handHud) {
       std::memcpy(&view.handHudViewFromPanel, input.handHudViewFromPanel[eye], sizeof(view.handHudViewFromPanel));
@@ -674,6 +691,8 @@ gfx::StereoReplayFrame make_stereo_replay_frame(const AuroraStereoFrame& input, 
   }
   return replay;
 }
+
+#include "vr_ui.hpp"
 
 void encode_virtual_screen_eye(wgpu::CommandEncoder& encoder, const webgpu::PresentSource& source, uint32_t eyeIndex) {
   const auto& output = g_stereoEyeTargets[eyeIndex].output();
@@ -728,11 +747,24 @@ std::optional<PendingStereoSink> run_stereo_sink(wgpu::CommandEncoder& encoder, 
   };
   for (uint32_t eye = 0; eye < AURORA_STEREO_EYE_COUNT; ++eye) {
     const auto& output = g_stereoEyeTargets[eye].output();
+    const webgpu::TextureWithSampler* image=&output;
+    const auto size=g_stereoOutputSizes[eye];
+    if(output.size.width!=size[0] || output.size.height!=size[1]) {
+      auto& upscale=g_stereoUpscaled[eye];
+      if(!upscale.texture || upscale.size.width!=size[0] || upscale.size.height!=size[1] || upscale.format!=output.format)
+        upscale=webgpu::create_render_texture(size[0],size[1],false);
+      auto& binding=g_stereoUpscaleBindings[eye];
+      if(!binding) binding=webgpu::create_copy_bind_group(output);
+      const wgpu::RenderPassColorAttachment attachment{.view=upscale.view,.loadOp=wgpu::LoadOp::Clear,.storeOp=wgpu::StoreOp::Store};
+      const wgpu::RenderPassDescriptor pd{.label="VR adaptive resolution upscale",.colorAttachmentCount=1,.colorAttachments=&attachment};
+      auto pass=encoder.BeginRenderPass(&pd);pass.SetPipeline(webgpu::g_CopyPipeline);pass.SetBindGroup(0,binding);pass.Draw(3);pass.End();
+      image=&upscale;
+    }
     frame.eyes[eye] = {
-        .texture = &output.texture,
-        .view = &output.view,
-        .size = output.size,
-        .format = output.format,
+        .texture = &image->texture,
+        .view = &image->view,
+        .size = image->size,
+        .format = image->format,
     };
   }
   if (!registration.callback(encoder, frame, registration.userdata)) {
@@ -1476,6 +1508,7 @@ void shutdown() noexcept {
 #ifdef AURORA_ENABLE_GX
   stop_presenter();
   g_stereoEyeTargets = {};
+  g_stereoUpscaleBindings={};g_stereoUpscaled={};g_stereoOutputSizes={};
   g_presentationImagePools = {};
   imgui::shutdown();
   gfx::shutdown();
@@ -1582,6 +1615,8 @@ bool begin_frame_render_state_impl(ImGuiFramePolicy imguiPolicy, bool* imguiNewF
 // Everything the mutex-free encode phase needs, latched while the renderer GPU mutex is held.
 // None of it may be re-read from a global later; the producer has already begun the next frame.
 struct SealedFrameContext {
+  AuroraStereoFrame uiFrame{};
+  AuroraVRUiGuide uiGuide{};
   double sealMs = 0, monoMs = 0, eyesMs = 0, bridgeMs = 0, submitMs = 0, prepareMs = 0, encodeMs = 0;
   wgpu::CommandEncoder encoder; // slot 0's encoder; already holds the staging copies
   webgpu::PresentSource presentSource{};
@@ -1615,6 +1650,8 @@ void seal_frame_locked(gfx::SealedFrame& sealedFrame, SealedFrameContext& ctx, u
   // pre-first-frame UINT32_MAX value to logical frame zero.
   ctx.logicalFrame = gfx::current_frame() + 1;
   if (const auto stereoInput = request_stereo_frame(ctx.logicalFrame, contentTag)) {
+    ctx.uiFrame=*stereoInput;
+    { std::lock_guard lock(vrui::mutex);ctx.uiGuide=vrui::guide; }
     ctx.stereoFrameToken = stereoInput->frameToken;
     ctx.stereoFrameMode = stereoInput->mode;
     ctx.stereoReplay = make_stereo_replay_frame(*stereoInput, sceneAnchor);
@@ -1760,6 +1797,23 @@ std::vector<PresentationJob> encode_sealed_frame(gfx::SealedFrame& sealedFrame, 
   auto finalImage = acquire_presentation_image(ctx.interpolatedFrameCount, ctx.snapshotWidth, ctx.snapshotHeight);
   encode_presentation_snapshot(encoder, ctx.presentSource, *finalImage, true);
 
+  // Exercise the actual VR environment pipeline without requiring an HMD.
+  // Paired with MKW_VR_INTRO_PREVIEW, this also enables GPU validation locally.
+  if (std::getenv("MKW_VR_ENV_PREVIEW") && std::getenv("MKW_VR_INTRO_PREVIEW")) {
+    if(const char* quality=std::getenv("MKW_VR_QUALITY_TEST"))
+      vrui::requestedQuality.store(std::clamp(std::atoi(quality),0,3),std::memory_order_relaxed);
+    AuroraStereoFrame preview{};
+    preview.ui.anchored=true;preview.ui.width=2.4f;preview.ui.distance=2.0f;
+    const webgpu::PresentSource mono{.bindGroup=finalImage->bindGroup,.texture=finalImage->texture.texture,
+      .size=finalImage->texture.size,.format=finalImage->texture.format};
+    for(uint32_t eye=0;eye<2;++eye) {
+      ensure_stereo_eye_target(eye,ctx.snapshotWidth,ctx.snapshotHeight);
+      preview.ui.eyeFromPanel[eye][0]=preview.ui.eyeFromPanel[eye][5]=preview.ui.eyeFromPanel[eye][10]=1;
+      preview.eyes[eye].projection[0]=0.8f;preview.eyes[eye].projection[5]=1.3f;
+      vrui::render(encoder,mono,preview,{},eye);
+    }
+  }
+
   // Keep both eye replays and the sink copy in the final submission. The
   // duplicate-slot path above may submit and rotate the encoder several
   // times, so encoding stereo before it would pair the post-submit callback
@@ -1781,7 +1835,8 @@ std::vector<PresentationJob> encode_sealed_frame(gfx::SealedFrame& sealedFrame, 
         .format = finalImage->texture.format,
     };
     for (uint32_t eye = 0; eye < AURORA_STEREO_EYE_COUNT; ++eye) {
-      encode_virtual_screen_eye(encoder, completedMono, eye);
+      if(ctx.uiFrame.ui.anchored) vrui::render(encoder,completedMono,ctx.uiFrame,ctx.uiGuide,eye);
+      else encode_virtual_screen_eye(encoder, completedMono, eye);
     }
   }
   ctx.eyesMs = elapsedMs(eyesStart);
@@ -1790,7 +1845,18 @@ std::vector<PresentationJob> encode_sealed_frame(gfx::SealedFrame& sealedFrame, 
     pendingStereoSink = run_stereo_sink(encoder, ctx.stereoFrameToken, ctx.logicalFrame, ctx.stereoFrameMode);
   }
   ctx.bridgeMs = elapsedMs(bridgeStart);
-  auto pendingFrameCapture = encode_frame_capture(encoder, ctx.presentSource);
+  // UI previews need the completed presentation, including ImGui. Ordinary
+  // renderer regression captures intentionally retain the raw game image.
+  webgpu::PresentSource captureSource = std::getenv("MKW_VR_INTRO_PREVIEW") != nullptr
+      ? webgpu::PresentSource{.bindGroup = finalImage->bindGroup,
+          .texture = finalImage->texture.texture, .size = finalImage->texture.size,
+          .format = finalImage->texture.format}
+      : ctx.presentSource;
+  if(std::getenv("MKW_VR_ENV_PREVIEW") && std::getenv("MKW_VR_INTRO_PREVIEW")) {
+    const auto& eye=g_stereoEyeTargets[0].output();
+    captureSource={.bindGroup=webgpu::create_copy_bind_group(eye),.texture=eye.texture,.size=eye.size,.format=eye.format};
+  }
+  auto pendingFrameCapture = encode_frame_capture(encoder, captureSource);
   presentationJobs.push_back({
       .image = std::move(finalImage),
       .logicalFrame = ctx.logicalFrame,
@@ -2218,7 +2284,13 @@ bool aurora_begin_frame() { return aurora::begin_frame(); }
 void aurora_end_frame() { aurora::end_frame(AURORA_STEREO_CONTENT_TAG_UNKNOWN); }
 void aurora_end_frame_tagged(uint64_t contentTag) { aurora::end_frame(contentTag); }
 void aurora_set_stereo_scene_anchor(const float anchorFromScene[12]) {
+    aurora::set_stereo_scene_anchor(anchorFromScene);
+}
+void aurora_set_stereo_scene_anchor_scaled(const float anchorFromScene[12], float unitsPerMeter) {
   aurora::set_stereo_scene_anchor(anchorFromScene);
+  uint32_t bits=0;std::memcpy(&bits,&unitsPerMeter,4);
+  if((bits&0x7f800000u)!=0x7f800000u && unitsPerMeter>0)
+    aurora::g_pendingSceneAnchor.unitsPerMeter=unitsPerMeter;
 }
 void aurora_set_frame_worker_wait_callback(AuroraFrameWorkerWaitCallback callback) {
   aurora::g_frameWorkerWaitCallback.store(callback, std::memory_order_release);
@@ -2270,6 +2342,40 @@ uint32_t aurora_get_frame_interpolation_fps() {
 void aurora_request_frame_capture(uint32_t frame, const char* outputPath) {
   aurora::g_captureOutputPath = outputPath != nullptr ? outputPath : "frame_capture.bmp";
   aurora::g_captureFrame.store(frame, std::memory_order_release);
+}
+
+void aurora_set_vr_controller_model(uint32_t hand,const AuroraVRControllerVertex* triangles,uint32_t count) {
+  if(hand>=2 || count>300000 || count%3!=0) return;
+  std::lock_guard lock(aurora::vrui::mutex);
+  if(triangles&&count) aurora::vrui::models[hand].assign(triangles,triangles+count);
+  else aurora::vrui::models[hand].clear();
+}
+float aurora_get_vr_panel_aspect(void) {
+  return aurora::vrui::panelAspect.load(std::memory_order_relaxed);
+}
+void aurora_set_vr_controller_texture(uint32_t material,uint32_t width,uint32_t height,const uint8_t* rgba) {
+  if(!material || !rgba || !width || !height || width>8192 || height>8192) return;
+  std::lock_guard lock(aurora::vrui::mutex);
+  auto& texture=aurora::vrui::controllerTextures[material];
+  if(texture.binding || !texture.pixels.empty()) return;
+  texture.width=width;texture.height=height;
+  texture.pixels.assign(rgba,rgba+size_t(width)*height*4);
+}
+void aurora_set_vr_ui_pointer(float x,float y,bool active,bool down) {
+    aurora::imgui::set_vr_pointer(x,y,active,down);
+}
+void aurora_set_vr_controller_anchors(uint32_t hand,const float* positions) {
+  if(hand>=2 || !positions) return;
+  std::lock_guard lock(aurora::vrui::mutex);
+  for(int row=0;row<5;++row) for(int axis=0;axis<3;++axis)
+    aurora::vrui::anchors[hand][row][axis]=positions[row*3+axis];
+}
+void aurora_set_vr_menu_shader_quality(int quality) {
+  aurora::vrui::requestedQuality.store(std::clamp(quality,0,3),std::memory_order_relaxed);
+}
+void aurora_set_vr_ui_guide(const AuroraVRUiGuide* guide) {
+  std::lock_guard lock(aurora::vrui::mutex);
+  aurora::vrui::guide=guide?*guide:AuroraVRUiGuide{};
 }
 bool aurora_flush_efb_copies_to_ram() {
 #ifdef AURORA_ENABLE_GX

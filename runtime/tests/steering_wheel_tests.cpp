@@ -154,6 +154,69 @@ int main() {
     const float caughtAngle=state.angle;
     for(int i=0;i<90;++i) state=wheel.Update(hands,true,dt);
     Check(std::abs(state.angle-caughtAngle)<0.001f,"grabbing during return to center arrests the return immediately");
+    WheelReferenceLatch reference;
+    WheelGeometry geometry;geometry.valid=true;
+    Check(reference.Resolve(geometry,true,true,true,false,1,dt),"valid native reference acquired");
+    geometry={};
+    Check(reference.Resolve(geometry,true,false,true,false,1,dt)&&geometry.valid,"brief mesh dropout retains held reference");
+    for(int i=0;i<30;++i) { geometry={};reference.Resolve(geometry,true,false,true,false,1,dt); }
+    Check(!reference.Resolve(geometry,true,false,true,false,1,dt),"missing reference expires");
+    geometry.valid=true;reference.Resolve(geometry,true,true,true,false,1,dt);geometry={};
+    Check(!reference.Resolve(geometry,true,false,true,false,2,dt),"vehicle change never inherits old controls");
+    geometry.valid=true;reference.Resolve(geometry,true,true,true,false,2,dt);
+    Check(!reference.Resolve(geometry,false,true,true,false,2,dt),"explicit disable overrides grace period");
+    wheel={}; hands={};hands[1]=Rim(0);
+    WheelTuning tuning;tuning.kartDegrees=45;
+    wheel.Update(hands,true,dt,SteeringWheel::Radius,false,tuning);
+    for(int i=1;i<=45;++i) { hands[1]=Rim(-i*pi/180);wheel.Update(hands,true,dt,SteeringWheel::Radius,false,tuning); }
+    for(int i=0;i<90;++i) state=wheel.Update(hands,true,dt,SteeringWheel::Radius,false,tuning);
+    Check(state.steering>.99f,"custom 45 degree lock is used by input");
+    tuning.kartDegrees=std::numeric_limits<float>::quiet_NaN();
+    state=wheel.Update(hands,true,dt,SteeringWheel::Radius,false,tuning);
+    Check(std::isfinite(state.steering),"invalid tuning cannot poison steering");
+
+    // Retracing motion beyond full lock must return to the original centre,
+    // including complete turns and atan2's +/-pi boundary in either direction.
+    for(bool bike : {false,true}) for(bool twoHands : {false,true}) for(float sign : {-1.0f,1.0f}) {
+        wheel={};
+        const auto pose=[&](int degrees) {
+            const float angle=sign*degrees*pi/180;
+            return std::array<WheelHand,2>{twoHands?Rim(pi-angle):WheelHand{},Rim(-angle)};
+        };
+        hands=pose(0);wheel.Update(hands,true,dt,0.18f,bike);
+        for(int i=1;i<=720;++i) { hands=pose(i);state=wheel.Update(hands,true,dt,0.18f,bike); }
+        for(int i=0;i<90;++i) state=wheel.Update(hands,true,dt,0.18f,bike);
+        Check(std::abs(state.angle-sign*4*pi)<0.003f,"physical wheel preserves two complete turns beyond full lock");
+        Check(sign*state.steering>0.99f,"overtravel saturates game steering without reversing it");
+        Check(bike ? std::abs(state.visualAngle-sign*pi/4)<0.003f : std::abs(state.visualAngle)<0.003f,
+            "kart visual follows complete turns while bike visual retains limited travel");
+        for(int i=719;i>=0;--i) { hands=pose(i);state=wheel.Update(hands,true,dt,0.18f,bike); }
+        for(int i=0;i<90;++i) state=wheel.Update(hands,true,dt,0.18f,bike);
+        Check(std::abs(state.angle)<0.003f && std::abs(state.steering)<0.003f,"return from overtravel preserves original centre for kart/bike and one/two hands");
+    }
+    // Bring both hands together away from the hub at full right lock. Once
+    // their span is too short to define a rigid control, jitter must not steer.
+    wheel={};hands={Rim(pi),Rim(0)};wheel.Update(hands,true,dt);
+    for(int i=1;i<=120;++i) { hands={Rim(pi-i*pi/180),Rim(-i*pi/180)};wheel.Update(hands,true,dt); }
+    for(int i=0;i<90;++i) state=wheel.Update(hands,true,dt);
+    const float lockAngle=state.angle;
+    const auto compressed=[&](float radius,float jitter=0) {
+        const float a=-120*pi/180+jitter;
+        return std::array<WheelHand,2>{
+            WheelHand{0.1f-radius*std::cos(a),SteeringWheel::Height+0.12f-radius*std::sin(a),SteeringWheel::Depth,1,true},
+            WheelHand{0.1f+radius*std::cos(a),SteeringWheel::Height+0.12f+radius*std::sin(a),SteeringWheel::Depth,1,true}};
+    };
+    for(int i=0;i<=90;++i) { hands=compressed(0.18f-0.16f*i/90);state=wheel.Update(hands,true,dt); }
+    for(int i=0;i<90;++i) { hands=compressed(0.02f,0.7f*std::sin(i*0.1f));state=wheel.Update(hands,true,dt); }
+    Check(state.held[0]&&state.held[1]&&std::abs(state.angle-lockAngle)<0.003f,"close-hand motion retains grip and cannot change steering reference");
+    for(int i=0;i<=90;++i) { hands=compressed(0.02f+0.16f*i/90);state=wheel.Update(hands,true,dt); }
+    for(int i=119;i>=0;--i) {
+        hands={Rim(pi-i*pi/180),Rim(-i*pi/180)};
+        for(auto& hand:hands) { hand.x+=0.1f;hand.y+=0.12f; }
+        state=wheel.Update(hands,true,dt);
+    }
+    for(int i=0;i<90;++i) state=wheel.Update(hands,true,dt);
+    Check(std::abs(state.steering)<0.003f,"opening hands after full lock still returns to the same centre");
     std::cout<<(failures?"FAIL":"PASS")<<": steering wheel scenarios\n";
     return failures?1:0;
 }

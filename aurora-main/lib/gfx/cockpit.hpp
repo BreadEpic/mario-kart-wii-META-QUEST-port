@@ -3,6 +3,7 @@
 #include "common.hpp"
 #include "../webgpu/gpu.hpp"
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -140,8 +141,8 @@ inline void runtime_hand(std::vector<Vertex>& out, const AuroraCockpitHand& hand
   for(size_t i=0;i+2<mesh.indices.size();i+=3)
     triangle(out,points[mesh.indices[i]],points[mesh.indices[i+1]],points[mesh.indices[i+2]],{0.91f,0.95f,1.0f});
 }
-inline std::vector<Vertex> geometry(const AuroraCockpit& cockpit) {
-  std::vector<Vertex> vertices;vertices.reserve(12000);
+inline void build_geometry(const AuroraCockpit& cockpit, std::vector<Vertex>& vertices) {
+  vertices.clear();vertices.reserve(12000);
   // The visible radius and position must match runtime/vr/steering_wheel.h.
   if (!cockpit.nativeWheel && cockpit.bike) {
     const float c=std::cos(cockpit.wheelAngle),s=std::sin(cockpit.wheelAngle);
@@ -170,8 +171,14 @@ inline std::vector<Vertex> geometry(const AuroraCockpit& cockpit) {
     if(current[side]) runtime_hand(vertices,cockpit.hands[side],*current[side]);
     else glove(vertices,cockpit.hands[side],side);
   }
-  return vertices;
 }
+inline std::vector<Vertex> geometry(const AuroraCockpit& cockpit) {
+  std::vector<Vertex> result;build_geometry(cockpit,result);return result;
+}
+inline std::atomic<uint64_t> meshRevision{1};
+inline std::vector<Vertex> frameVertices;
+inline AuroraCockpit cachedCockpit{};
+inline uint64_t cachedMeshRevision=0;
 inline wgpu::RenderPipeline pipeline;
 struct SceneDepth {
   float z=0, constant=0;
@@ -180,8 +187,11 @@ struct SceneDepth {
 inline uint32_t pipelineSamples=0;
 inline bool pipelineReversedDepth=false;
 inline wgpu::TextureFormat pipelineFormat{};
-inline void shutdown() { pipeline=nullptr;pipelineSamples=0; }
-inline void render(wgpu::CommandEncoder& cmd,const StereoReplayFrame& frame,uint32_t eye,SceneDepth sceneDepth={}) {
+inline std::array<wgpu::Buffer,2> vertexBuffers;
+inline std::array<uint64_t,2> vertexCapacity{};
+inline void shutdown() { pipeline=nullptr;pipelineSamples=0;vertexBuffers={};vertexCapacity={};cachedMeshRevision=0;frameVertices.clear(); }
+inline void render(wgpu::CommandEncoder& cmd,const StereoReplayFrame& frame,uint32_t eye,SceneDepth sceneDepth={},
+                   const wgpu::RenderPassEncoder* existingPass=nullptr) {
   if(!frame.cockpit.active || !sceneDepth.valid) return;
   using namespace webgpu;
   const auto& target=frame.eyes[eye].target;
@@ -214,10 +224,16 @@ inline void render(wgpu::CommandEncoder& cmd,const StereoReplayFrame& frame,uint
     pipeline=g_device.CreateRenderPipeline(&desc);pipelineSamples=target.msaaSamples;pipelineFormat=format;
     pipelineReversedDepth=reversedDepth;
   }
-  const auto vertices=geometry(frame.cockpit);
+  const auto revision=meshRevision.load();
+  if(cachedMeshRevision!=revision || std::memcmp(&cachedCockpit,&frame.cockpit,sizeof(AuroraCockpit))!=0) {
+    build_geometry(frame.cockpit,frameVertices);
+    cachedCockpit=frame.cockpit;cachedMeshRevision=revision;
+  }
+  const auto& vertices=frameVertices;
   if(vertices.empty()) return;
   struct ClipVertex { float p[4]; V color; };
-  std::vector<ClipVertex> clip(vertices.size());
+  static std::vector<ClipVertex> clip;
+  clip.resize(vertices.size());
   const auto& projection=frame.eyes[eye].projection;
   for(size_t i=0;i<clip.size();++i) {
     const auto p=point(frame.cockpit.eyeFromSeat[eye],vertices[i].position);
@@ -227,16 +243,25 @@ inline void render(wgpu::CommandEncoder& cmd,const StereoReplayFrame& frame,uint
     clip[i]={{projection.m0[0]*p[0]+projection.m0[2]*p[2],projection.m1[1]*p[1]+projection.m1[2]*p[2],
       std::clamp(z,0.0f,std::max(-p[2],0.0f)),-p[2]},vertices[i].color};
   }
-  const wgpu::BufferDescriptor bd{.label="VR cockpit vertices",.usage=wgpu::BufferUsage::Vertex,
-      .size=clip.size()*sizeof(ClipVertex),.mappedAtCreation=true};
-  auto buffer=g_device.CreateBuffer(&bd);
-  std::memcpy(buffer.GetMappedRange(),clip.data(),clip.size()*sizeof(ClipVertex));buffer.Unmap();
+  const uint64_t bytes=clip.size()*sizeof(ClipVertex);
+  if (!vertexBuffers[eye] || vertexCapacity[eye]<bytes) {
+    vertexCapacity[eye]=(bytes+65535)&~uint64_t(65535);
+    const wgpu::BufferDescriptor bd{.label="VR cockpit vertices",.usage=wgpu::BufferUsage::Vertex|wgpu::BufferUsage::CopyDst,
+      .size=vertexCapacity[eye]};
+    vertexBuffers[eye]=g_device.CreateBuffer(&bd);
+  }
+  auto& buffer=vertexBuffers[eye];
+  g_queue.WriteBuffer(buffer,0,clip.data(),bytes);
   const wgpu::RenderPassColorAttachment attachment{.view=target.colorView,.resolveTarget=target.resolveView,
     .loadOp=wgpu::LoadOp::Load,.storeOp=wgpu::StoreOp::Store};
   const wgpu::RenderPassDepthStencilAttachment depth{.view=target.depthView,.depthLoadOp=wgpu::LoadOp::Load,
     .depthStoreOp=wgpu::StoreOp::Store,.depthClearValue=1.0f};
   const wgpu::RenderPassDescriptor pd{.label="VR cockpit overlay",.colorAttachmentCount=1,.colorAttachments=&attachment,.depthStencilAttachment=&depth};
-  auto pass=cmd.BeginRenderPass(&pd);pass.SetPipeline(pipeline);pass.SetVertexBuffer(0,buffer);pass.Draw(clip.size());pass.End();
+  auto pass=existingPass?*existingPass:cmd.BeginRenderPass(&pd);
+  pass.SetViewport(0,0,float(target.size.width),float(target.size.height),0,1);
+  pass.SetScissorRect(0,0,target.size.width,target.size.height);
+  pass.SetPipeline(pipeline);pass.SetVertexBuffer(0,buffer);pass.Draw(clip.size());
+  if(!existingPass) pass.End();
 }
 } // namespace aurora::gfx::cockpit
 
@@ -250,5 +275,5 @@ extern "C" void aurora_set_vr_hand_mesh(uint32_t hand,const AuroraVRHandVertex* 
     mesh=std::make_shared<HandMesh>();mesh->vertices.assign(vertices,vertices+vertexCount);mesh->indices.assign(indices,indices+indexCount);
     for(int j=0;j<26;++j) { mesh->bind[j]=from_pose(bindPoses+j*7);mesh->inverseBind[j]=inverse(mesh->bind[j]);mesh->parents[j]=parents[j]; }
   }
-  std::lock_guard lock(meshMutex);meshes[hand]=std::move(mesh);
+  std::lock_guard lock(meshMutex);meshes[hand]=std::move(mesh);++meshRevision;
 }

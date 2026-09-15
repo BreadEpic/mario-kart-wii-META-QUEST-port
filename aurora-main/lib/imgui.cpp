@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <mutex>
 
 #include <webgpu/webgpu_cpp.h>
 #include <SDL3/SDL_events.h>
@@ -28,6 +29,11 @@ static bool g_useSdlRenderer = false;
 // Set once ImGui::Render() has produced this frame's draw data. Interpolation encodes up to four
 // ImGui passes per frame, and every one of them used to rebuild the draw lists from scratch.
 static bool g_frameDataBuilt = false;
+static std::mutex g_pointerMutex;
+static struct { float x=0,y=0;bool active=false,down=false; } g_pointer;
+void set_vr_pointer(float x,float y,bool active,bool down) noexcept {
+  std::lock_guard lock(g_pointerMutex);g_pointer={x,y,active,down};
+}
 
 static std::vector<SDL_Texture*> g_sdlTextures;
 static std::vector<wgpu::Texture> g_wgpuTextures;
@@ -168,6 +174,19 @@ void new_frame(const AuroraWindowSize& size) noexcept {
   ImGuiIO& io = ImGui::GetIO();
   io.DisplayFramebufferScale = framebufferScale;
   ImGui::GetIO().DisplaySize = displaySize;
+  {
+    std::lock_guard lock(g_pointerMutex);
+    static bool pressed=false;
+    if(g_pointer.active) {
+      io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+      io.AddMousePosEvent(g_pointer.x,g_pointer.y);
+    }
+    const bool down=g_pointer.active && g_pointer.down;
+    if(down!=pressed) io.AddMouseButtonEvent(0,down);
+    pressed=down;
+    // No refresh means tracking/menu was lost: release on the next frame.
+    g_pointer.active=false;
+  }
   ImGui::NewFrame();
   g_frameDataBuilt = false;
 }
@@ -252,3 +271,4 @@ ImTextureID aurora_imgui_add_texture(uint32_t width, uint32_t height, const void
   return aurora::imgui::add_texture(width, height, static_cast<const uint8_t*>(rgba8));
 }
 }
+

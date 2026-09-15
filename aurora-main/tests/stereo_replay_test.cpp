@@ -38,6 +38,25 @@ TEST(StereoReplayTest, EyeFrustumPreservesGameDepthMapping) {
   }
 }
 
+TEST(StereoReplayTest, CameraHighlightHasSameDirectionInAsymmetricEyes) {
+  Mat4x4<float> game{};
+  game.m0={1.3f,0,0,0};game.m1={0,1.7f,0,0};
+  game.m2={0,0,-1,-.1f};game.m3={0,0,-1,0};
+  const float x=.3f,y=.2f,z=-2.f;
+  for(float offset:{-.12f,.12f}) {
+    auto eye=game;eye.m0[0]=.95f;eye.m0[2]=offset;
+    eye.m1[1]=1.05f;eye.m1[2]=.03f;
+    const auto projected=compose_projection(eye,game);
+    const float ndcX=(projected.m0[0]*x+projected.m0[2]*z)/-z;
+    const float ndcY=(projected.m1[1]*y+projected.m1[2]*z)/-z;
+    // The compositor's inverse frustum must recover one shared camera ray.
+    EXPECT_NEAR((ndcX+eye.m0[2])/eye.m0[0],x/-z,1e-6f);
+    EXPECT_NEAR((ndcY+eye.m1[2])/eye.m1[1],y/-z,1e-6f);
+    const float oldNdcX=game.m0[0]*x/-z;
+    EXPECT_GT(std::abs((oldNdcX+eye.m0[2])/eye.m0[0]-x/-z),.05f);
+  }
+}
+
 Mat4x4<float> game_orthographic_projection() {
   // x over [0, 640) and y over [0, 456) mapped to NDC, with a shallow depth
   // window, as GX builds an orthographic projection for a 2D layer.
@@ -277,3 +296,4 @@ TEST(StereoReplayTest, HandPanelKeepsMetricSizeAndStereoDisparity) {
 
 } // namespace
 } // namespace aurora::gfx::stereo_replay
+

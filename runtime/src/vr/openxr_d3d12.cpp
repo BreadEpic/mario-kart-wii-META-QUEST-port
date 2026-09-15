@@ -296,10 +296,9 @@ public:
             std::lock_guard lock(submission_mutex_);
             if (awaiting_token_ != 0) return Fail("An OpenXR GPU job is already pending");
         }
-        const auto& presentation = frame.presentation;
-
-        const uint32_t target_count =
-            presentation.mode == OpenXRD3D12FrameMode::VirtualScreen ? 1u : kOpenXREyeCount;
+        // Controller polling may establish the menu anchor after acquisition
+        // in the synchronous path. Reserve both eyes even on that first frame.
+        const uint32_t target_count = kOpenXREyeCount;
         if (target_count == 1) {
             frame.render_width[1] = frame.render_width[0];
             frame.render_height[1] = frame.render_height[0];
@@ -415,7 +414,7 @@ public:
         const auto& image = cached_frame_;
         if (!show_cached || !cached_frame_valid_ || !frame.xr_frame.should_render || !frame.xr_frame.views_valid) {
             ok = runtime_->EndFrameWithoutLayers(frame.xr_frame);
-        } else if (image.presentation.mode == OpenXRD3D12FrameMode::VirtualScreen) {
+        } else if (image.presentation.mode == OpenXRD3D12FrameMode::VirtualScreen && !image.presentation.anchored) {
             XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
             quad.space = runtime_->ViewSpace();
             quad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
@@ -424,6 +423,7 @@ public:
                                                static_cast<int32_t>(eye_swapchains_[0].height)}};
             quad.pose.orientation.w = 1.0f;
             quad.pose.position.z = -std::max(0.25f, image.presentation.quad_distance_meters);
+            AnchorPanel(quad);
             quad.size.width = std::max(0.25f, image.presentation.quad_width_meters);
             quad.size.height = quad.size.width * float(eye_swapchains_[0].height) / float(eye_swapchains_[0].width);
             const XrCompositionLayerBaseHeader* layers[]{reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad)};
@@ -489,7 +489,7 @@ public:
             end_ok = true;
         } else if (!can_submit) {
             end_ok = runtime_->EndFrameWithoutLayers(frame.xr_frame);
-        } else if (frame.presentation.mode == OpenXRD3D12FrameMode::VirtualScreen) {
+        } else if (frame.presentation.mode == OpenXRD3D12FrameMode::VirtualScreen && !frame.presentation.anchored) {
             XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
             quad.layerFlags = 0;
             quad.space = runtime_->ViewSpace();
@@ -501,6 +501,7 @@ public:
             quad.subImage.imageArrayIndex = 0;
             quad.pose.orientation = {0.0f, 0.0f, 0.0f, 1.0f};
             quad.pose.position = {0.0f, 0.0f, -std::max(0.25f, frame.presentation.quad_distance_meters)};
+            AnchorPanel(quad);
             quad.size.width = std::max(0.25f, frame.presentation.quad_width_meters);
             quad.size.height = quad.size.width * static_cast<float>(eye_swapchains_[0].height) /
                                static_cast<float>(eye_swapchains_[0].width);
@@ -601,6 +602,15 @@ public:
     const std::string& LastError() const { return last_error_; }
 
 private:
+    void AnchorPanel(XrCompositionLayerQuad& quad) const {
+        if(!runtime_->PanelAnchored()) return;
+        const auto anchor=runtime_->PanelOrigin();
+        const auto& q=anchor.orientation;
+        const auto offset=RotateUiVector(q.x,q.y,q.z,q.w,{0,0,quad.pose.position.z});
+        quad.space=runtime_->AppSpace();
+        quad.pose=anchor;
+        quad.pose.position.x+=offset[0];quad.pose.position.y+=offset[1];quad.pose.position.z+=offset[2];
+    }
     bool SelectSwapchainFormat() {
         const auto& formats = runtime_->SwapchainFormats();
         // Aurora's UNORM target contains the gamma-encoded bytes expected by
@@ -913,3 +923,4 @@ const std::string& OpenXRD3D12Backend::LastError() const { return m_impl->LastEr
 } // namespace mkw::vr
 
 #endif // defined(MKW_ENABLE_OPENXR) && defined(_WIN32)
+

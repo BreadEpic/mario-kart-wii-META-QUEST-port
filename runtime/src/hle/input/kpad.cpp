@@ -7,6 +7,15 @@
 #include <cmath>
 #include <cstdint>
 
+#include "vr_menu_pointer.inl"
+
+// Keep registrations in a .cpp file scanned by RuntimeNativeIndexBuilder.
+// _AS retains the original translated bodies used by the wrappers, while
+// excluding these addresses from the generated indirect-dispatch winners.
+REGISTER_NATIVE_FUNCTION_AS(0x805201B0, VrMenuControllerUpdate, "VR menu controller update");
+REGISTER_NATIVE_FUNCTION_AS(0x8052281C, VrMenuPointerEnabled, "VR menu pointer capability");
+REGISTER_NATIVE_FUNCTION_AS(0x8052286C, VrMenuControllerType, "VR menu pointer controller type");
+
 // KPAD HLE fed by a real Bluetooth Wii Remote. The game calls KPADRead once per
 // frame with room for 16 KPADStatus entries and only looks at entry 0; with a
 // Classic Controller it also calls KPADGetUnifiedWpadStatus for the raw
@@ -247,3 +256,4 @@ extern "C" int32_t KPAD__GetUnifiedWpadStatus_HLE(uint32_t chan, uint32_t status
 }
 PPC_NATIVE_OVERRIDE(8019812C, KPAD__GetUnifiedWpadStatus_HLE, int32_t,
          (uint32_t chan, uint32_t statusPtr, uint32_t count), (chan, statusPtr, count));
+

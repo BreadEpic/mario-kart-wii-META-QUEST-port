@@ -19,7 +19,15 @@ function Get-MkwFileSha256([string]$Path) {
     Lower-case SHA-256 of one file. -LiteralPath is required: Get-FileHash treats a positional
     path as a wildcard, so an install directory containing [, ] or * would hash the wrong file.
     #>
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $stream = [IO.File]::OpenRead($Path)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
+    }
+    finally {
+        $sha256.Dispose()
+        $stream.Dispose()
+    }
 }
 
 function Get-MkwToolchainPath([string]$ToolchainRoot) {

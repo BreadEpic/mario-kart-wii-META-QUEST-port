@@ -4,6 +4,8 @@ param(
     [string]$PortableToolsDirectory = 'Launcher/artifacts/portable-tools',
     [string]$DependencySourceDirectory = 'Launcher/artifacts/dependencies',
     [string]$VcRuntimeDirectory,
+    [string]$WheelWizardDotnet = 'dotnet',
+    [string]$WheelWizardRepository = 'https://github.com/TeamWheelWizard/WheelWizard.git',
     [string]$ToolkitReleaseTag = $env:GITHUB_REF_NAME
 )
 
@@ -24,6 +26,9 @@ $payloadRoot = Join-Path $workRoot 'payload'
 $setupProject = Join-Path $PSScriptRoot 'WiiCompiled.Setup.Windows\WiiCompiled.Setup.Windows.csproj'
 $translatorProject = Join-Path $repoRoot 'translator\src\Translator.Cli\Translator.Cli.csproj'
 $projectFile = Join-Path $repoRoot 'projects\mkwii\recomp.yml'
+$wheelWizardPin = '86618e7367df935d78401583136e492c6f00fa27'
+$wheelWizardSource = Join-Path $workRoot 'WheelWizard-source'
+$wheelWizardPublish = Join-Path $publish 'WheelWizard'
 
 # Everything Mario-Kart-specific in the manifest below is read from the project file rather than
 # restated here, and Test-PinnedFacts.ps1 checks the copies that cannot read it (the C++ entry
@@ -169,6 +174,30 @@ $translator = Join-Path $publish 'translator\Translator.Cli.exe'
 Assert-File $setupHost 'Published setup host'
 Assert-File $translator 'Self-contained translator'
 
+Write-Host 'Publishing the integrated WheelWizard launcher...'
+$bundledDotnet10 = Join-Path $portableTools 'dotnet10\dotnet.exe'
+$wheelWizardDotnetCommand = if ($WheelWizardDotnet -eq 'dotnet' -and
+    (Test-Path -LiteralPath $bundledDotnet10 -PathType Leaf)) { $bundledDotnet10 } else { $WheelWizardDotnet }
+& git clone --no-checkout $WheelWizardRepository $wheelWizardSource
+if ($LASTEXITCODE -ne 0) { throw 'WheelWizard checkout failed.' }
+& git -C $wheelWizardSource checkout --detach $wheelWizardPin
+if ($LASTEXITCODE -ne 0) { throw 'Pinned WheelWizard revision is unavailable.' }
+$wheelWizardPatch = Join-Path $repoRoot 'integrations\wheelwizard-vr.patch'
+& git -C $wheelWizardSource apply --check $wheelWizardPatch
+if ($LASTEXITCODE -ne 0) { throw 'WheelWizard integration patch does not match the pinned revision.' }
+& git -C $wheelWizardSource apply $wheelWizardPatch
+if ($LASTEXITCODE -ne 0) { throw 'WheelWizard integration patch failed.' }
+& $wheelWizardDotnetCommand publish (Join-Path $wheelWizardSource 'WheelWizard\WheelWizard.csproj') `
+    -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true `
+    -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true `
+    -p:CSharpier_Check=false -o $wheelWizardPublish
+if ($LASTEXITCODE -ne 0) { throw 'WheelWizard publish failed.' }
+Copy-Item -LiteralPath (Join-Path $wheelWizardSource 'LICENSE') `
+    -Destination (Join-Path $wheelWizardPublish 'LICENSE-WheelWizard.txt')
+Set-Content -LiteralPath (Join-Path $wheelWizardPublish 'vr-local.txt') `
+    -Value 'installed' -Encoding UTF8
+Assert-File (Join-Path $wheelWizardPublish 'WheelWizard.exe') 'Integrated WheelWizard launcher'
+
 # Resolved via the shared WiiCompiled.Setup.Common.Cli helper (also used by build-appimage.sh on
 # Linux) rather than a separate download/version-pin copy here: it downloads and caches the same way
 # NodToolProvider.cs always does (Launcher/artifacts/nodtool.exe)
@@ -221,6 +250,8 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'LocalBuild.ps1') -Destination (
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'NativeBuildFlags.ps1') -Destination (Join-Path $workspace 'NativeBuildFlags.ps1')
 [IO.Directory]::CreateDirectory((Join-Path $workspace 'Dependencies')) | Out-Null
 foreach ($name in $requiredDependencies) { Copy-Directory (Join-Path $dependencySources $name) (Join-Path $workspace "Dependencies\$name") }
+
+Copy-Directory $wheelWizardPublish (Join-Path $payloadRoot 'WheelWizard')
 
 [IO.Directory]::CreateDirectory((Join-Path $payloadRoot 'host')) | Out-Null
 Copy-Item $setupHost (Join-Path $payloadRoot 'host\WiiCompiled-Setup.exe')
@@ -308,7 +339,7 @@ Write-Host '[4/6] Enforcing the copyright and generated-code boundary...'
 Write-Host '[5/6] Creating the canonical installer payload...'
 $payloadZip = Join-Path $workRoot 'payload.zip'
 Compress-Zip $payloadRoot $payloadZip @(
-    'Toolkit','BuildWorkspace','host','licenses','payload-manifest.json')
+    'Toolkit','BuildWorkspace','WheelWizard','host','licenses','payload-manifest.json')
 
 Write-Host '[6/6] Producing the single-file setup executable...'
 $outputSetup = Join-Path $outputRoot 'WiiCompiled-Setup.exe'

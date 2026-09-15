@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO.Compression;
 using System.Text.Json;
 using System.Windows.Forms;
+using WiiCompiled.Setup.Common;
 
 internal static class EnglishInstaller
 {
@@ -149,7 +150,7 @@ internal static class EnglishInstaller
             Controls.Add(layout);
             AcceptButton = _install;
 
-            if (File.Exists(Path.Combine(AppContext.BaseDirectory, "WheelWizard", "vr-local.txt")))
+            if (IsPortableBundle())
             {
                 _portable.Checked = true;
                 _destination.Text = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
@@ -322,6 +323,7 @@ internal static class EnglishInstaller
                         ? "Portable installation complete. You can move the entire selected folder to another location."
                         : "WiiCompiled VR was installed successfully.",
                     Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                StartInstalledLauncher(installDirectory);
             }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
             {
@@ -348,6 +350,47 @@ internal static class EnglishInstaller
                 _operation = null;
                 SetBusy(false);
                 if (_closeAfterCancel) Close();
+            }
+        }
+
+        private void StartInstalledLauncher(string installDirectory)
+        {
+            var portableLauncher = PortableRoot.TryFind(installDirectory) is { } portableRoot
+                ? Path.Combine(portableRoot, "WheelWizard", "WheelWizard.exe")
+                : null;
+            var launcher = portableLauncher is not null && File.Exists(portableLauncher)
+                ? portableLauncher
+                : Path.Combine(installDirectory, "WheelWizard", "WheelWizard.exe");
+            try
+            {
+                Process.Start(new ProcessStartInfo(launcher)
+                {
+                    WorkingDirectory = Path.GetDirectoryName(launcher)!,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception exception)
+            {
+                _details.AppendText("The installation succeeded, but the launcher could not start: " +
+                                    exception.Message + Environment.NewLine);
+            }
+        }
+
+        private static bool IsPortableBundle()
+        {
+            var marker = Path.Combine(AppContext.BaseDirectory, "WheelWizard", "vr-local.txt");
+            try
+            {
+                return File.Exists(marker) &&
+                       File.ReadAllText(marker).Trim().Equals("portable", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
             }
         }
 

@@ -172,7 +172,9 @@ pack. This does not make every file written by the game compilation transactiona
 keep your previous portable folder when testing a development build.
 
 Download the [latest release](https://github.com/heurazy/mario-kart-wii-VR-port/releases/latest).
-`WiiCompiled-Setup.exe` is the standalone English launcher/installer. For a complete portable
+`WiiCompiled-Setup.exe` is the standalone English installer. It installs the integrated Wheel
+Wizard launcher, creates a **Mario Kart Wii VR Launcher** desktop and Start Menu shortcut, and
+opens the launcher when installation finishes. For a complete portable
 bundle, download `WiiCompiled-VR-Portable-v1.0.zip`, extract it, run
 `WiiCompiled-VR-Setup.exe`, choose your own clean PAL RMCP01 disc image, keep portable mode
 enabled, then launch `WheelWizard\WheelWizard.exe`. You can select **Mario Kart Wii VR** or

@@ -1,10 +1,12 @@
 using Microsoft.Win32;
+using WiiCompiled.Setup.Common;
 
 namespace WiiCompiled.Setup.Windows;
 
 internal static class ShellIntegration
 {
-    private const string ShortcutFileName = "wiicompiled (base) (beta).lnk";
+    private const string ShortcutFileName = "Mario Kart Wii VR Launcher.lnk";
+    private const string LegacyShortcutFileName = "wiicompiled (base) (beta).lnk";
 
     public static void RegisterUninstaller(string installDirectory, bool retroInstalled)
     {
@@ -27,26 +29,34 @@ internal static class ShellIntegration
     public static void UnregisterUninstaller() =>
         Registry.CurrentUser.DeleteSubKeyTree(ProductInfo.UninstallKey, throwOnMissingSubKey: false);
 
-    /// <summary>Creates the desktop and Start Menu shortcuts that launch the base game.</summary>
+    /// <summary>Creates desktop and Start Menu shortcuts for the integrated launcher.</summary>
     public static void CreateShortcuts(string installDirectory)
     {
-        var cli = Path.Combine(installDirectory, ProductInfo.SetupCopyName);
+        var portableLauncher = PortableRoot.TryFind(installDirectory) is { } portableRoot
+            ? Path.Combine(portableRoot, "WheelWizard", "WheelWizard.exe")
+            : null;
+        var launcher = portableLauncher is not null && File.Exists(portableLauncher)
+            ? portableLauncher
+            : Path.Combine(installDirectory, "WheelWizard", "WheelWizard.exe");
+        if (!File.Exists(launcher))
+            throw new FileNotFoundException("The integrated WheelWizard launcher is missing.", launcher);
         var shellType = Type.GetTypeFromProgID("WScript.Shell")
                         ?? throw new InvalidOperationException("The Windows Script Host shell is unavailable.");
         dynamic shell = Activator.CreateInstance(shellType)!;
         foreach (var path in ShortcutPaths())
         {
             dynamic shortcut = shell.CreateShortcut(path);
-            shortcut.TargetPath = cli;
-            shortcut.Arguments = "--launch-base";
-            shortcut.WorkingDirectory = installDirectory;
-            shortcut.IconLocation = cli + ",0";
-            shortcut.Description = "Play Mario Kart Wii (base game)";
+            shortcut.TargetPath = launcher;
+            shortcut.Arguments = "";
+            shortcut.WorkingDirectory = Path.GetDirectoryName(launcher);
+            shortcut.IconLocation = launcher + ",0";
+            shortcut.Description = "Launch Mario Kart Wii VR and Retro Rewind VR";
             shortcut.Save();
         }
+        foreach (var legacy in LegacyShortcutPaths()) File.Delete(legacy);
     }
 
-    public static void RemoveShortcuts() => RemoveShortcuts(ShortcutPaths());
+    public static void RemoveShortcuts() => RemoveShortcuts(ShortcutPaths().Concat(LegacyShortcutPaths()));
 
     internal static void RemoveShortcuts(IEnumerable<string> shortcutPaths)
     {
@@ -62,6 +72,12 @@ internal static class ShellIntegration
     [
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), ShortcutFileName),
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs", ShortcutFileName),
+    ];
+
+    private static string[] LegacyShortcutPaths() =>
+    [
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), LegacyShortcutFileName),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs", LegacyShortcutFileName),
     ];
 
     private static void DeleteFileBestEffort(string path, List<Exception> failures)

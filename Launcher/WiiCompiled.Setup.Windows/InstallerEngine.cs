@@ -75,6 +75,7 @@ internal sealed class InstallerEngine
         }
         payload.ExtractEntry("host/WiiCompiled-Setup.exe",
             Path.Combine(staging, ProductInfo.SetupCopyName));
+        payload.ExtractDirectory("WheelWizard", Path.Combine(staging, "WheelWizard"));
         payload.ExtractDirectory("licenses", Path.Combine(staging, "licenses"));
         payload.ExtractEntry(InstalledLayout.PayloadManifestFileName,
             Path.Combine(staging, InstalledLayout.PayloadManifestFileName));
@@ -279,6 +280,8 @@ internal sealed class InstallerEngine
         List<InstallTransactionEntry> entries, CancellationToken cancellationToken,
         int progressPercent = 95, int completionPercent = 99)
     {
+        entries.Add(InstallTransactionEntry.Directory(Path.Combine(staging, "WheelWizard"),
+            Path.Combine(installDirectory, "WheelWizard")));
         entries.Add(InstallTransactionEntry.Directory(Path.Combine(staging, "licenses"),
             Path.Combine(installDirectory, "licenses")));
         entries.Add(InstallTransactionEntry.File(Path.Combine(staging, ProductInfo.SetupCopyName),

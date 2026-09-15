@@ -17,7 +17,7 @@ new file mode 100644
 index 0000000..ee4c4c3
 --- /dev/null
 +++ b/WheelWizard/Services/Launcher/LocalVrLauncher.cs
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,102 @@
 +using System.Diagnostics;
 +using WheelWizard.Models.Enums;
 +using WheelWizard.Mods;
@@ -31,7 +31,9 @@ index 0000000..ee4c4c3
 +    private static readonly SemaphoreSlim LaunchGate = new(1, 1);
 +    public static bool IsLocalBundle => File.Exists(Path.Combine(AppContext.BaseDirectory, "vr-local.txt"));
 +    public static string BundleRoot => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
-+    public static string RuntimeDirectory => Path.Combine(BundleRoot, "Install");
++    public static string RuntimeDirectory => Directory.Exists(Path.Combine(BundleRoot, "Install"))
++        ? Path.Combine(BundleRoot, "Install")
++        : BundleRoot;
 +    public string GameTitle => title;
 +    private string Executable => Path.Combine(RuntimeDirectory, executableRelativePath);
 +
@@ -94,9 +96,14 @@ index 0000000..ee4c4c3
 +
 +    private async Task<OperationResult> RunSetup()
 +    {
-+        var setup = Path.Combine(BundleRoot, "WiiCompiled-VR-Setup.exe");
++        var portableSetup = Path.Combine(BundleRoot, "WiiCompiled-VR-Setup.exe");
++        var installedSetup = Path.Combine(BundleRoot, "WiiCompiled-Setup.exe");
++        var runtimeSetup = Path.Combine(RuntimeDirectory, "WiiCompiled-Setup.exe");
++        var setup = File.Exists(portableSetup) ? portableSetup
++            : File.Exists(installedSetup) ? installedSetup
++            : runtimeSetup;
 +        if (!File.Exists(setup))
-+            return Fail("WiiCompiled-VR-Setup.exe is missing from the portable folder.");
++            return Fail("The WiiCompiled VR setup executable is missing from the installation folder.");
 +        try
 +        {
 +            using var process = Process.Start(new ProcessStartInfo(setup) { UseShellExecute = true });

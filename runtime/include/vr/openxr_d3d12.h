@@ -45,6 +45,7 @@ struct OpenXRD3D12Presentation {
     // and centered straight ahead at -Z.
     float quad_distance_meters = 2.0f;
     float quad_width_meters = 2.4f;
+    bool anchored = false;
 };
 
 struct OpenXRD3D12Frame {

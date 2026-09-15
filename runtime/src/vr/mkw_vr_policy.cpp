@@ -238,6 +238,8 @@ void MkwVRPolicyInvalidateRaceCamera() noexcept {
 
 void MkwVRPolicySetSettingsVisible(bool visible) noexcept {
     std::lock_guard lock(g_policy_mutex);
+    // UI is composed into the mono snapshot, then projected into both eyes.
+    // Invalidate cached race images on entry and cached UI images on exit.
     ApplyPolicyMutation([&] { g_policy.settings_visible = visible; });
 }
 
@@ -265,6 +267,7 @@ MkwVRPolicySnapshot MkwVRPolicyGetSnapshot() noexcept {
     snapshot.camera = g_policy.camera;
     snapshot.available_bindings = g_policy.available_bindings;
     snapshot.session_active = g_policy.session_active;
+    snapshot.settings_visible = g_policy.settings_visible;
     snapshot.first_person_engaged =
         g_policy.first_person_engaged && snapshot.presentation == VRPresentationMode::ImmersiveRace;
     snapshot.safety_generation = g_policy.safety_generation;

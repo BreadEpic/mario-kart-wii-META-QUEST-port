@@ -1,7 +1,7 @@
 # Dielectric menu background
 
 The VR menu environment in `aurora-main/lib/vr_ui.hpp` adapts the
-“Dielectric” shader credited to @Xor in the FragCoord.xyz screenshot
+“Dielectric” shader credited to [@XorDev](https://x.com/XorDev) in the FragCoord.xyz screenshot
 provided by the user.
 
 Reference supplied by the user: https://t.co/kdebpbDcaQ
@@ -15,4 +15,3 @@ separation produce parallax instead of sampling an infinitely distant panorama.
 
 The source's licensing terms have not been verified. Attribution here does
 not establish permission for redistribution of the original shader.
-

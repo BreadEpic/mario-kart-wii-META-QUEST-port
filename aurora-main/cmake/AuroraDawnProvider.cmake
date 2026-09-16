@@ -43,6 +43,8 @@ endfunction()
 set(_aurora_dawn_provider "${AURORA_DAWN_PROVIDER}")
 if (_aurora_dawn_provider STREQUAL "auto")
   # Prebuilt Dawn packages available for: windows-{amd64,arm64}, linux-{x86_64,aarch64}, darwin-{arm64,x86_64}
+  # Android (the standalone Quest target) has no prebuilt and always falls
+  # through to the vendored source build below.
   set(_has_package FALSE)
   if (WIN32 AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|x86_64|ARM64|aarch64)$")
     set(_has_package TRUE)
@@ -89,6 +91,15 @@ if (_aurora_dawn_provider STREQUAL "vendor")
       "Use fetch_dawn_dependencies.py as an alternative to using depot_tools")
     if (CMAKE_SYSTEM_NAME STREQUAL Linux)
       set(DAWN_USE_WAYLAND ON CACHE INTERNAL "Enable support for Wayland surface")
+    elseif (CMAKE_SYSTEM_NAME STREQUAL Android)
+      # Android is a Linux kernel without X11 or Wayland. Dawn's desktop surface
+      # support probes for both and fails the configure when it finds neither,
+      # so they are turned off explicitly rather than left to detection.
+      # Vulkan is the only backend on this target and it presents through the
+      # OpenXR compositor, never through a window surface.
+      set(DAWN_USE_X11 OFF CACHE INTERNAL "Disable X11 surface support on Android")
+      set(DAWN_USE_WAYLAND OFF CACHE INTERNAL "Disable Wayland surface support on Android")
+      set(DAWN_USE_GLFW OFF CACHE INTERNAL "Disable GLFW on Android")
     endif ()
     set(TINT_BUILD_TESTS OFF CACHE INTERNAL "Build tests")
     set(TINT_BUILD_CMD_TOOLS OFF CACHE INTERNAL "Build the Tint command line tools")

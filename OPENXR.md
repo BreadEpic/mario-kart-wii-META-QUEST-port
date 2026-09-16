@@ -203,13 +203,18 @@ the configuration file.
 | Backend | Status |
 | --- | --- |
 | Windows D3D12 | Implemented: same-adapter, same-device asynchronous OpenXR submission. |
+| Android / Quest Vulkan | Session and swapchain code implemented; blocked on the Dawn native-handle bridge. See [QUEST.md](QUEST.md). |
 | Linux / other platforms | Not supported by the current distribution. |
 
 ## Known limitations
 
 - Only the PAL `RMCP01` translation has the race instrumentation required for immersive rendering.
 - Wii Remote support is a separate input path and has its own documented limitations.
-- Dedicated Quest, Android, and Apple visionOS packaging is not implemented.
+- Standalone Meta Quest (Android) packaging exists but does not yet run on a
+  headset: the platform, OpenXR and APK layers are implemented and cross-compile
+  for arm64-v8a, while Dawn-on-Android, Aurora's SDL3 windowing and the
+  Vulkan/OpenXR device bridge are unresolved. See [QUEST.md](QUEST.md).
+- Apple visionOS packaging is not implemented.
 - Scene-specific comfort options, culling fixes, replay/spectator classification, and advanced VR
   remapping are future work.
 - Full per-eye EFB post-processing is not implemented. Effects which sample the mono EFB remain

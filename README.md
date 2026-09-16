@@ -71,6 +71,20 @@ preserving personal and compiled game data.
 No release contains a ROM or a translated game executable. Compilation is intentionally performed
 locally from the disc image you select.
 
+## Running on a Meta Quest
+
+There are two ways a Quest can run this port, and they are at very different
+stages:
+
+- **Tethered (works today).** Quest 2/3/Pro/3S connected to a Windows PC over
+  Quest Link, Air Link or Virtual Desktop, running the Windows build described
+  above. This is the supported path.
+- **Standalone on the headset (not yet runnable).** A native Android/arm64 build
+  with no PC. The platform, OpenXR and packaging layers are implemented and
+  cross-compile, but it does not render on a device yet. See
+  [QUEST.md](QUEST.md) for exactly what is done, what is blocked, and how to
+  build it.
+
 ## Quest and OpenXR controls
 
 The runtime uses standard OpenXR actions, so Quest 2, Quest 3, Touch Pro, Valve Index, PICO, Vive,
@@ -174,7 +188,8 @@ powershell -ExecutionPolicy Bypass -File Launcher/Build-Portable.ps1 `
 
 The build boundary deliberately excludes translated game code and game data from Git and releases.
 See [OPENXR.md](OPENXR.md) for the implementation details, configuration keys, controller profiles,
-and validation notes.
+and validation notes, and [QUEST.md](QUEST.md) for the standalone Meta Quest
+(Android) target and `Launcher/Build-Quest.sh`.
 
 ## Credits
 - **[Wiicompiled VR](https://github.com/iChris4/Wiicompiled_VR)** by Ichris4, all the openxr render system was taken from his project 

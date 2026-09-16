@@ -57,7 +57,9 @@ decomposes into three independent problems:
 | Per-headset defaults and refresh-rate selection | `runtime/include/vr/quest_device_profile.h` | Implemented, unit-tested |
 | APK packaging | `android/` | Implemented |
 | Build orchestration | `Launcher/Build-Quest.sh` | Implemented |
-| Vulkan ↔ OpenXR device bridge | `aurora-main/lib/webgpu/vulkan_interop.cpp` | **Contract only — returns failure** |
+| Dawn Vulkan native-handle export | `aurora-main/cmake/patches/dawn-vulkan-native-handles.patch` | Implemented |
+| Vulkan ↔ OpenXR stereo bridge (AHardwareBuffer handoff, native copy, fencing) | `aurora-main/lib/webgpu/vulkan_interop.cpp` | Implemented, never executed |
+| Presentation loop driving that bridge | `runtime/src/vr/openxr_integration.cpp` | **Not written — D3D12 only** |
 
 ### How the above was checked
 
@@ -68,6 +70,20 @@ and `openxr_android.cpp` were compiled against the pinned OpenXR SDK
 build is unaffected by the Android branches. A CMake configure with the NDK
 toolchain file reaches Aurora's dependency resolution, which is where the
 blockers below begin.
+
+`vulkan_interop.cpp` compiles for the same target against the real headers it
+will use at build time: the NDK's Vulkan and `AHardwareBuffer` headers, Dawn's
+generated WebGPU headers (so the `SharedTextureMemory` descriptors and the
+`ChainedStructOut` layout-handoff types are the compiler's, not hand-written),
+and Dawn's `VulkanBackend.h` with the patch applied. The resulting object's
+undefined symbols were checked to confirm it references `AHardwareBuffer_allocate`
+and all four patched Dawn exports, rather than silently compiling the
+not-available stub. The patch was verified to apply cleanly to an unmodified
+Dawn checkout.
+
+None of it has been executed. Compiling is not running: the bridge's image
+layouts, memory-type selection and fence retirement are the kind of thing only
+a device validates, and the Vulkan validation layers have never seen this code.
 
 `mkw_quest_device_profile_tests` is a new CTest target and passes on the host,
 alongside the existing VR tests (`mkw_vr_first_person_tests`,
@@ -102,21 +118,39 @@ to run SDL with the `offscreen` or `dummy` video driver and keep only its audio
 and timing subsystems, or to give Aurora a headless initialisation path. Neither
 is implemented. Audio in particular has not been looked at.
 
-### 3. The Vulkan ↔ OpenXR device bridge
+### 3. The presentation loop for Vulkan
 
-This is the real work. `runtime/src/vr/openxr_vulkan_backend.cpp` is complete
-enough to own a Vulkan-bound session and its per-eye swapchains, but it refuses
-to initialise while `OpenXRVulkanBackend::DawnInteropCapability()` reports
-`DawnNativeHandlesUnavailable`, which it does because nothing exposes Dawn's
-`VkPhysicalDevice`, `VkDevice`, `VkQueue` and queue family.
+The device bridge itself is now implemented; what is missing is the code that
+drives it frame to frame.
 
-`aurora-main/include/aurora/vulkan_interop.h` now defines that contract and
-`vulkan_interop.cpp` implements the queue lock/unlock pair, but
-`aurora_vulkan_get_native_handles` deliberately returns `false` rather than
-plausible-looking zeros: OpenXR would accept a zeroed binding and then fault on
-the first submission. Filling it in requires Dawn's Vulkan introspection against
-the vendored tree from blocker 1, plus a stereo sink equivalent to the D3D12 one
-in `aurora-main/lib/webgpu/d3d12_interop.cpp`.
+What exists: `aurora-main/lib/webgpu/vulkan_interop.cpp` is a full Vulkan
+sibling of `d3d12_interop.cpp`. It obtains Dawn's `VkInstance`,
+`VkPhysicalDevice`, `VkDevice`, `VkQueue` and queue family (through the Dawn
+patch described below), allocates an `AHardwareBuffer` per eye, imports it into
+Dawn as a `SharedTextureMemory` and into Vulkan as an aliasing `VkImage`, takes
+the Dawn `BeginAccess`/`EndAccess` layout handoff, and submits a native
+`vkCmdCopyImage` into the OpenXR swapchain image on Dawn's own queue, retiring
+each submission through a `VkFence`.
+
+Dawn's stock `VulkanBackend.h` publishes only `VkInstance`, so
+`cmake/patches/dawn-vulkan-native-handles.patch` exposes the rest. Every handle
+it needs is already reachable internally and `GetVkDevice` is in fact already
+defined upstream but never declared; the patch is additive and mirrors the
+D3D12 backend, which already exports its device and command queue. It is
+applied to the vendored Dawn tree automatically, and idempotently, at configure
+time.
+
+What is missing: `runtime/src/vr/openxr_integration.cpp` — the ~1000-line loop
+that acquires swapchain images, paces frames against the compositor, and drives
+the sink — is written directly against `OpenXRD3D12Backend` and its frame
+types. A Vulkan backend exposing the same interface shape (the pimpl'd
+`BeginFrame`/`WaitForSubmission`/`FinishFrame` contract in
+`runtime/include/vr/openxr_d3d12.h`) has to exist before that loop can be made
+platform-neutral. `runtime/src/vr/openxr_vulkan_backend.cpp` owns the session
+and swapchains but does not present that interface.
+
+Until then nothing calls `aurora_vulkan_enable_stereo_bridge`, so the bridge is
+compiled and linked but never runs.
 
 ### 4. Android lifecycle in the frame loop
 

@@ -410,6 +410,16 @@ target_include_directories(mkw_quest_device_profile_tests PRIVATE
 target_compile_features(mkw_quest_device_profile_tests PRIVATE cxx_std_17)
 add_test(NAME mkw_quest_device_profile_tests COMMAND mkw_quest_device_profile_tests)
 
+# Which OpenXR runtime a process uses. Pure policy, so the Quest Link / Virtual
+# Desktop / SteamVR decision is checkable without a headset or a registry.
+add_executable(mkw_openxr_runtime_selection_tests
+    "${CMAKE_CURRENT_LIST_DIR}/tests/openxr_runtime_selection_tests.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/src/vr/openxr_runtime_selection.cpp")
+target_include_directories(mkw_openxr_runtime_selection_tests PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/include")
+target_compile_features(mkw_openxr_runtime_selection_tests PRIVATE cxx_std_17)
+add_test(NAME mkw_openxr_runtime_selection_tests COMMAND mkw_openxr_runtime_selection_tests)
+
 add_executable(mkw_openxr_controller_profiles_tests
     "${CMAKE_CURRENT_LIST_DIR}/tests/openxr_controller_profiles_tests.cpp")
 target_include_directories(mkw_openxr_controller_profiles_tests PRIVATE

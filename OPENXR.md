@@ -10,7 +10,9 @@ GPU, or graphics binding is unavailable unless `required = true` is selected.
 ## Requirements
 
 - Windows 10 or 11, 64-bit.
-- An active Windows OpenXR runtime and a connected compatible headset.
+- An active Windows OpenXR runtime and a connected compatible headset. Any runtime works; on a
+  Quest that is usually Quest Link/Air Link (Meta), Virtual Desktop, or SteamVR. SteamVR is not
+  required, and a missing runtime falls back to the desktop mirror rather than refusing to start.
 - A D3D12-capable GPU and driver accepted by both OpenXR and Dawn.
 - A build made with `MKW_ENABLE_OPENXR=ON`, which is enabled by default on Windows.
 
@@ -25,6 +27,11 @@ The generic runtime defaults to OpenXR disabled; the VR installer enables it. Th
 [vr]
 enabled = false
 required = false
+# auto (default) uses whichever OpenXR runtime you have made active, which is
+# what makes Quest Link, Air Link, Virtual Desktop and SteamVR all work without
+# configuration. Force one with "meta", "virtualdesktop", "steamvr", or pin the
+# system default with "system".
+runtime = "auto"
 render_scale = 1.0
 world_units_per_meter = 500.0
 hud_distance_meters = 2.0
